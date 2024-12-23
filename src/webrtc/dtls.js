@@ -3,13 +3,9 @@ const {Offset} = require('../helpers/common_helper');
 const { sha256, PRF } = require('../helpers/crypto_helper');
 const fs = require('fs');
 
-const certificatePath = '/Users/faihan-13346/Desktop/node_peer/certificates3/cert.pem'
-const keyPath = '/Users/faihan-13346/Desktop/node_peer/certificates3/key.pem'
-
-const certificateContents = fs.readFileSync(certificatePath, {encoding: 'utf-8'});
-const keyContents = fs.readFileSync(keyPath, {encoding: 'utf-8'});
-
 let selfCertificateFingerprint = null;
+let certificateContents = null;
+let keyContents = null;
 
 async function getFingerprintOfCertificate() {
     if(!selfCertificateFingerprint){
@@ -24,8 +20,11 @@ async function calculateAndSetSelfCertificateFingerprint(){
     selfCertificateFingerprint = await sha256(certBuffer);
 }
 
-calculateAndSetSelfCertificateFingerprint();
-
+function initializeDTLS(certificatePath, keyPath){
+    certificateContents = fs.readFileSync(certificatePath, {encoding: 'utf-8'});
+    keyContents = fs.readFileSync(keyPath, {encoding: 'utf-8'});
+    calculateAndSetSelfCertificateFingerprint();
+}
 
 class DTLSContext{
 
@@ -930,6 +929,7 @@ class DTLSContext{
 
 module.exports = {
     getFingerprintOfCertificate,
+    initializeDTLS,
     DTLSContext
 };
 

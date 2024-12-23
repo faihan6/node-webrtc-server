@@ -1,4 +1,4 @@
-const { PeerContext } = require('../src/webrtc/peer_context');
+const { PeerContext } = require('../webrtc/peer_context');
 
 class UserContext{
 
