@@ -1,18 +1,15 @@
-const { SRTPContext } = require('./srtp');
 
-const { DTLSContext, getFingerprintOfCertificate } = require('./dtls');
 const { ICEContext } = require('./stun');
+const { DTLSContext, getFingerprintOfCertificate } = require('./dtls')
+const { RTPContext } = require('./rtp');
+const { SRTPContext } = require('./srtp');
 const { SimpleStream } = require('../helpers/simple_stream');
+
 class PeerContext{
 
     remoteCertificateFingerprint = null;
 
     iceContext = new ICEContext({onPacketReceived: this.allocatePacketToAppropriateMethod.bind(this)});
-    #srtpContext = new SRTPContext({
-        onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
-        onRTPPacketReadyForApplication: this.#processPacket.bind(this)
-    });
-    dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
 
     // TODO: direction is a property of transceiver, not peer itself. need to change it.
     selfDirection = null;
@@ -28,8 +25,24 @@ class PeerContext{
     };
     #localSSRCStreams = {};
 
+    dtlsContext = null;
+    #srtpContext = null;
 
     constructor(){
+
+        if(globalThis.disableWebRTCEncryption){
+            this.#srtpContext = new RTPContext({
+                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
+                onRTPPacketReadyForApplication: this.#processPacket.bind(this)
+            });
+        }
+        else{
+            this.#srtpContext = new SRTPContext({
+                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
+                onRTPPacketReadyForApplication: this.#processPacket.bind(this)
+            });
+            this.dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
+        }
     }
 
     async generateAnswer(offer) {
@@ -63,8 +76,24 @@ class PeerContext{
         this.iceContext.setRemoteUfragAndPassword(remoteUfrag, remotePwd);
     
         // 3. Get the certificate fingerprint from the offer
-        const remoteCertificateFingerprint = offer.sdp.match(/a=fingerprint:(.*)/)[1];
-        this.dtlsContext.setRemoteFingerprint(remoteCertificateFingerprint);
+        const certificateFPInOffer = offer.sdp.match(/a=fingerprint:(.*)/);
+        if(certificateFPInOffer){
+            if(globalThis.disableWebRTCEncryption){
+                throw new Error('Fingerprint found in offer. But server is running in no encryption mode. Rejecting.');
+            }
+            else{
+                const remoteCertificateFingerprint = certificateFPInOffer[1];
+                this.dtlsContext.setRemoteFingerprint(remoteCertificateFingerprint);
+            }
+        }
+        else{
+            if(globalThis.disableWebRTCEncryption){
+                console.log('No fingerprint in the offer. Remote Peer wants no encryption')
+            }
+            else{
+                throw new Error('Fingerprint not found in offer. Rejecting');
+            }
+        }
     
         // 4. get ICE ufrag and pwd for self
         const selfUfrag = this.iceContext.selfUfrag
@@ -81,7 +110,6 @@ class PeerContext{
         // console.log('candidates', remoteCandidates);
         // console.log('ufrag', remoteUfrag);
         // console.log('pwd', remotePwd);
-        // console.log('fingerprint', remoteCertificateFingerprint);
         // console.log('self_ufrag', selfUfrag);
         // console.log('self_pwd', selfPwd);
     
@@ -99,9 +127,12 @@ class PeerContext{
         sdp += 'a=ice-ufrag:' + selfUfrag + '\r\n';
         sdp += 'a=ice-pwd:' + selfPwd + '\r\n';
     
-        const fp = this.formatFingerprint(await getFingerprintOfCertificate())
-        console.log('our fingerprint', fp);
-        sdp +=  (fp) + '\r\n';
+        if(certificateFPInOffer){
+            const fp = this.formatFingerprint(await getFingerprintOfCertificate())
+            console.log('our fingerprint', fp);
+            sdp +=  (fp) + '\r\n';
+        }
+
         sdp += 'a=setup:passive\r\n';
         
         for(const candidateStr of this.iceContext.getCandidates()){
@@ -134,7 +165,7 @@ class PeerContext{
     }
 
     allocatePacketToAppropriateMethod(packet, remote){
-        if(packet.at(0) == 0x16){
+        if(packet.at(0) == 0x16 && this.dtlsContext){
             const response = this.dtlsContext.handleDTLS(packet);
             this.iceContext.sendPacket(response, remote);
         }
