@@ -1,4 +1,4 @@
-const { SRTPContext } = require('./rtp');
+const { SRTPContext } = require('./srtp');
 
 const { DTLSContext, getFingerprintOfCertificate } = require('./dtls');
 const { ICEContext } = require('./stun');
@@ -10,7 +10,7 @@ class PeerContext{
     iceContext = new ICEContext({onPacketReceived: this.allocatePacketToAppropriateMethod.bind(this)});
     #srtpContext = new SRTPContext({
         onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
-        onRTPPacketReady: this.#processPacket.bind(this)
+        onRTPPacketReadyForApplication: this.#processPacket.bind(this)
     });
     dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
 
@@ -139,7 +139,7 @@ class PeerContext{
             this.iceContext.sendPacket(response, remote);
         }
         if(packet.at(0) >> 6 == 0x02){
-            this.#srtpContext.handleSRTPFromRemote(packet, remote);
+            this.#srtpContext.handlePacketFromRemote(packet, remote);
         }
     }
 

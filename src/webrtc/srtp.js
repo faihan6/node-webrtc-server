@@ -55,8 +55,8 @@ class SRTPContext extends RTPContext{
 
     srtcpIndexCount = {}
 
-    constructor({onPacketReadyToSend, onRTPPacketReady}){
-        super({onPacketReadyToSend, onRTPPacketReady});
+    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication}){
+        super({onPacketReadyToSend, onRTPPacketReadyForApplication});
     }
 
 
@@ -203,7 +203,7 @@ class SRTPContext extends RTPContext{
     
     handlePacketFromRemote(packet, remote){
 
-        const version = rtcpPacket[0] >> 6;
+        const version = packet[0] >> 6;
         if(version != 2){
             console.error('Invalid version');
             return;
@@ -361,25 +361,19 @@ class SRTPContext extends RTPContext{
          
     }
 
-    sendRTPToRemote(rtpPacket){
+    sendPacketToRemote(packet){
 
         let encryptedPacket;
         let type;
-        if((rtpPacket[1] & 0b01111111) == 96){
+        if((packet[1] & 0b01111111) == 96){
             type = 'RTP';
-            encryptedPacket = this.encryptRTP(rtpPacket, this.srtpParams.serverKeys);
+            encryptedPacket = this.encryptRTP(packet, this.srtpParams.serverKeys);
         }
         else{
             type = 'RTCP';
-            encryptedPacket = this.encryptRTCP(rtpPacket, this.srtpParams.serverKeys);
-
-            // // test
-            // const encrypted = this.decryptSRTCP(encryptedPacket, this.srtpParams.serverKeys);
-            // //console.log('Encryption is good. Decrypted RTCP:', encrypted.toString('hex'));
+            encryptedPacket = this.encryptRTCP(packet, this.srtpParams.serverKeys);
         }
 
-        
-        //console.log(`Encrypted.. Sending ${type} packet to remote`);
         this.sendPacketToRemoteCallback(encryptedPacket);
     }
 
