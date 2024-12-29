@@ -43,6 +43,12 @@ class ICEContext{
 
     sendPacket(packet, remote){
         if(!remote){
+
+            if(!this.remote){
+                console.log("Remote not set. Ignoring packet", packet);
+                return
+            }
+
             remote = this.remote;
         }
         this.udpSocket.send(packet, remote.port, remote.address);

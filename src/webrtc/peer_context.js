@@ -206,8 +206,8 @@ class PeerContext{
         else{
             let startIndex = 0;
             while(true){
-                console.log('startIndex:', startIndex);
-                const rtpPacketLengthBytes = (packet.readUInt16BE(startIndex + 2) * 4) + 1;
+                //console.log('startIndex:', startIndex);
+                const rtpPacketLengthBytes = (packet.readUInt16BE(startIndex + 2) + 1) * 4;
                 const rtpPacketBuffer = packet.slice(startIndex, startIndex + rtpPacketLengthBytes);
 
                 this.#handleSingleRTCPPacket(rtpPacketBuffer);
@@ -233,7 +233,7 @@ class PeerContext{
 
         this.#initStreams(ssrc);
 
-        console.log('RTCP SSRC:', ssrc);
+        //console.log('RTCP SSRC:', ssrc);
         this.#remoteSSRCStreams[null].rtcpEvents.write(packet);
         this.#remoteSSRCStreams[ssrc].rtcpEvents.write(packet);
     }
@@ -260,7 +260,7 @@ class PeerContext{
     }
 
     addRTPStream(stream){
-        console.log('Adding RTP stream to peer context', stream);
+        console.log('Adding RTP stream to peer context');
         stream.addEventListener('data', (data) => {
             //console.log('RTP from remote arrived, writing to wire..')
             this.#srtpContext.sendPacketToRemote(data);
@@ -268,9 +268,9 @@ class PeerContext{
     }
 
     addRTCPEventsStream(stream){
-        console.log('Adding RTCP Events stream to peer context', stream);
+        console.log('Adding RTCP Events stream to peer context');
         stream.addEventListener('data', (data) => {
-            console.log('RTCP arrived, writing to wire..')
+            //console.log('RTCP arrived, writing to wire..')
             this.#srtpContext.sendPacketToRemote(data);
         })
     }

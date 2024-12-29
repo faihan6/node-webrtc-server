@@ -23,8 +23,14 @@ function initializeSignalling(){
                     receivers.push(receiver);
 
                     
-                    // If there is a sender, make the sender subscribe to the receiver's RTCP events
+                    // If there is a sender, 
+                    // make the receiver subscribe to the sender's RTP stream
+                    //make the sender subscribe to the receiver's RTCP events
                     if(sender){
+
+                        const rtpStream = sender.peer.subscribeToRTPStream(null);
+                        receiver.peer.addRTPStream(rtpStream);
+
                         // TODO: ideally we need to subscribe only for Events (PLI and FIR) not for all RTP packets.
                         const eventStream = receiver.peer.subscribeToRTCPEventsStream(null);
                         sender.peer.addRTCPEventsStream(eventStream);

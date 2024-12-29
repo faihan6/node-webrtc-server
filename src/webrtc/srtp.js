@@ -363,6 +363,12 @@ class SRTPContext extends RTPContext{
 
     sendPacketToRemote(packet){
 
+        if(!Object.keys(this.srtpParams.serverKeys).length){
+            console.error('SRTP keys not set');
+            return;
+        }
+
+
         let encryptedPacket;
         let type;
         if((packet[1] & 0b01111111) == 96){
