@@ -44,6 +44,16 @@ DataView.prototype.getUint24 = function(offset){
     return this.getUint16(offset) * 256 + this.getUint8(offset + 2);
 }
 
+function setUInt24(buffer, offset, value){
+    try{
+        buffer.writeUInt16BE((value >> 8) & 0xffff, offset);
+        buffer.writeUInt8(value & 0xff, offset + 2);
+    }
+    catch(err){
+        console.error('Error setting UInt24', err, buffer, offset, value);
+    }
+}
+
 function ntpToTimeMs(msw, lsw){
     
     const unixTime = msw - 2208988800;
@@ -56,5 +66,5 @@ function ntpToTimeMs(msw, lsw){
 }
 
 module.exports = {
-    Offset, getFormattedHexBuffer, ntpToTimeMs, CustomEventTarget
+    Offset, getFormattedHexBuffer, ntpToTimeMs, CustomEventTarget, setUInt24
 }

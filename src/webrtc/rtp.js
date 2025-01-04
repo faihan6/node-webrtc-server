@@ -1,5 +1,5 @@
 
-const {ntpToTimeMs} = require('../helpers/common_helper');
+const {ntpToTimeMs, setUInt24} = require('../helpers/common_helper');
 
 /**
  * This class takes care of processing RTP packets.
@@ -71,18 +71,24 @@ class RTPContext{
     }
 
     #initSequenceNo(ssrc, currentSeqNo){
-        this.#ssrcStats[ssrc] = {
-            baseSeqNo: currentSeqNo,
-            maxSeqNo: currentSeqNo,
-            lastBadSeqNo: RTPContext.#RTP_SEQ_MOD + 1,
-            cycles: 0,
-            packetsReceived: 0,
 
-            // TODO: rename it later
-            received_prior: 0,
-            expected_prior: 0,
-
+        if(!this.#ssrcStats[ssrc]){
+            this.#ssrcStats[ssrc] = {}
         }
+
+        this.#ssrcStats[ssrc].baseSeqNo = currentSeqNo;
+        this.#ssrcStats[ssrc].maxSeqNo = currentSeqNo;
+        this.#ssrcStats[ssrc].lastBadSeqNo = RTPContext.#RTP_SEQ_MOD + 1;
+        this.#ssrcStats[ssrc].cycles = 0;
+        this.#ssrcStats[ssrc].packetsReceived = 0;
+
+        // TODO: rename it later
+        this.#ssrcStats[ssrc].received_prior = 0;
+        this.#ssrcStats[ssrc].expected_prior = 0;
+
+        //console.log('Initialized sequence number for SSRC:', ssrc, currentSeqNo);
+
+        
     }
 
     #updateSequenceNo(ssrc, currentSeqNo){
@@ -94,6 +100,10 @@ class RTPContext{
             if(currentSeqNo == ssrcStats.maxSeqNo + 1){
                 ssrcStats.probationPacketsRemaining--;
                 ssrcStats.maxSeqNo = currentSeqNo;
+
+                //TODO: packetsReceived is not being incremented when in probation. 
+                // So it will be zero and those packets are considered as lost when sending RR 
+                // This is what the pseudocode in RFC 3550 looked like. Check if it is fine.
 
                 if(ssrcStats.probationPacketsRemaining == 0){
                     this.#initSequenceNo(ssrc, currentSeqNo);
@@ -139,12 +149,20 @@ class RTPContext{
 
         const ssrc = rtpPacket.readUInt32BE(8);
         const seqNo = rtpPacket.readUInt16BE(2);
+
+        const rtpTimestamp = rtpPacket.readUInt32BE(4);
         
 
         if(!this.#ssrcStats[ssrc]){
+            console.log('First packet for SSRC:', ssrc);
             this.#initSequenceNo(ssrc, seqNo);
-            this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
+            //this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
             this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
+
+            this.#ssrcStats[ssrc].baseRTPTimestamp = rtpTimestamp;
+            this.#ssrcStats[ssrc].baseWallclockTime = performance.now();
+
+            this.#ssrcStats[ssrc].clockRate = 90000;
         }
         else{
             this.#updateSequenceNo(ssrc, seqNo);
@@ -157,7 +175,25 @@ class RTPContext{
             return;
         }
 
-        //console.log(JSON.stringify(this.#ssrcStats[ssrc]))
+        const arrivalRTPTime = this.#getCurrentRTPTime(ssrc);
+
+        //console.log('RTP Time:', rtpTimestamp, 'Arrival Time:', arrivalRTPTime);
+        if(this.#ssrcStats[ssrc].lastRTPTimestamp && this.#ssrcStats[ssrc].lastArrivalRTPTimestamp){
+            const dCurrent = arrivalRTPTime - rtpTimestamp;
+            const dPrevious = this.#ssrcStats[ssrc].lastArrivalRTPTimestamp - this.#ssrcStats[ssrc].lastRTPTimestamp;
+
+            const currentJitter = Math.abs(dCurrent - dPrevious);
+
+            if(!this.#ssrcStats[ssrc].jitter){
+                this.#ssrcStats[ssrc].jitter = currentJitter;
+            }
+            else{
+                this.#ssrcStats[ssrc].jitter += (currentJitter - this.#ssrcStats[ssrc].jitter) / 16;
+            }
+        }
+        
+        this.#ssrcStats[ssrc].lastRTPTimestamp = rtpTimestamp;
+        this.#ssrcStats[ssrc].lastArrivalRTPTimestamp = arrivalRTPTime;
 
         this.rtpPacketReadyForApplicationCallback(rtpPacket);
     }
@@ -189,10 +225,6 @@ class RTPContext{
                 rtpTimestamp,
                 packetCount,
                 octetCount,
-            }
-
-            if(!this.#ssrcStats[ssrc]){
-                this.#ssrcStats[ssrc] = {}
             }
 
             const receiverReport = this.generateReceiverReport(ssrc);
@@ -238,6 +270,49 @@ class RTPContext{
         const dlsrBuffer = Buffer.alloc(4);
         dlsrBuffer.writeUInt32BE(dlsr, 0);
 
+        /* 
+            When calculating RR when only one packet has arrived,
+            extendedSeqNo (a.k.a the seq no of last packet) and base sequence no will be the same.
+            Calcualating expected packets with extendedSeqNo - baseSeqNo would give zero in this case
+            But, the no of packets received so far is one.
+            So, when calculating expectedPackets, always add 1 to include the first packet as well.
+        */
+        const expectedPackets = extendedSeqNo - ssrcStats.baseSeqNo + 1
+        const lostPackets = expectedPackets - ssrcStats.packetsReceived;
+
+        //console.log('Expected:', expectedPackets, 'Received:', ssrcStats.packetsReceived, 'Lost:', lostPackets);
+
+        const lostPacketsBuffer = Buffer.alloc(3);
+        setUInt24(lostPacketsBuffer, 0, lostPackets);
+
+        let fractionLost = 0;
+        if(ssrcStats.received_prior && ssrcStats.expected_prior){
+            const expectedPacketsSinceLastReport = expectedPackets - ssrcStats.expected_prior;
+            const receivedPacketsSinceLastReport = ssrcStats.packetsReceived - ssrcStats.received_prior;
+            const lostPacketsSinceLastReport = expectedPacketsSinceLastReport - receivedPacketsSinceLastReport;
+
+            
+            if(lostPacketsSinceLastReport == 0 || expectedPacketsSinceLastReport == 0){
+                fractionLost = 0;
+            }
+            else{
+                fractionLost = Math.floor((lostPacketsSinceLastReport * 256) / expectedPacketsSinceLastReport);
+                if(fractionLost < 0){
+                    fractionLost = 0;
+                }
+            }
+            
+        }
+
+        ssrcStats.received_prior = ssrcStats.packetsReceived;
+        ssrcStats.expected_prior = expectedPackets;
+
+        const jitter = Math.floor(ssrcStats.jitter);
+        const jitterAsBuffer = Buffer.alloc(4); // jitter represented as a buffer, not the jitter buffer used to rearrange packets
+        jitterAsBuffer.writeUInt32BE(jitter, 0);
+        
+        
+
         const temp = [
             // version : 2, padding : 0, report count: 1 
             2 << 6 | 0 << 5 | 1,
@@ -257,16 +332,16 @@ class RTPContext{
             ...ssrcBuffer,
 
             // fraction lost
-            0,
+            fractionLost,
 
             // cumulative no of pkts lost
-            ...[0, 0, 0],
+            ...lostPacketsBuffer,
 
             // extended seq no
             ...extendedSeqNoBuffer,
 
             // jitter
-            ...[0, 0, 0, 0],
+            ...jitterAsBuffer,
 
             // last SR
             ...ntpMiddle32Bits,
@@ -287,6 +362,16 @@ class RTPContext{
     sendPacketToRemote(rtpPacket){
         //console.log(`Encrypted.. Sending ${type} packet to remote`);
         this.sendPacketToRemoteCallback(rtpPacket);
+    }
+
+    #getCurrentRTPTime(ssrc){
+        const ssrcStats = this.#ssrcStats[ssrc];
+        const wallclockTime = performance.now();
+        //console.log('Wallclock Time:', wallclockTime, 'Base Wallclock Time:', ssrcStats.baseWallclockTime, ssrcStats, ssrc);
+        const timeDiffSec = (wallclockTime - ssrcStats.baseWallclockTime) / 1000
+        const timeDiffRTPUnits = timeDiffSec * ssrcStats.clockRate;
+        const currentRTPTime = ssrcStats.baseRTPTimestamp + timeDiffRTPUnits;
+        return currentRTPTime;
     }
 
 }
