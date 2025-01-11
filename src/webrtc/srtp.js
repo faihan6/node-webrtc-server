@@ -373,6 +373,7 @@ class SRTPContext extends RTPContext{
         let type;
         if((packet[1] & 0b01111111) == 96){
             type = 'RTP';
+            this.processRTPBeforeSending(packet);
             encryptedPacket = this.encryptRTP(packet, this.srtpParams.serverKeys);
         }
         else{

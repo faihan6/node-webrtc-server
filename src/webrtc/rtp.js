@@ -191,7 +191,7 @@ class RTPContext{
                 this.#ssrcStats[ssrc].jitter += (currentJitter - this.#ssrcStats[ssrc].jitter) / 16;
             }
         }
-        
+
         this.#ssrcStats[ssrc].lastRTPTimestamp = rtpTimestamp;
         this.#ssrcStats[ssrc].lastArrivalRTPTimestamp = arrivalRTPTime;
 
@@ -359,9 +359,30 @@ class RTPContext{
         return buffer;
     }
 
-    sendPacketToRemote(rtpPacket){
-        //console.log(`Encrypted.. Sending ${type} packet to remote`);
-        this.sendPacketToRemoteCallback(rtpPacket);
+    sendPacketToRemote(packet){
+        const payloadType = packet[1] & 0b01111111;
+        if(this.#knownRTPPayloadTypes.has(payloadType)){
+            this.processRTPBeforeSending(packet);
+        }
+
+        this.sendPacketToRemoteCallback(packet);
+    }
+
+    processRTPBeforeSending(rtpPacket){
+        const ssrc = rtpPacket.readUInt32BE(8);
+        if(!this.#ssrcStats[ssrc]){
+            this.#ssrcStats[ssrc] = {
+                packetsSent: 0,
+                payloadBytesSent: 0,
+                baseWallclockTime: performance.now(),
+
+            }
+        }
+
+        this.#ssrcStats[ssrc].packetsSent += 1;
+        // TODO: payload may not always start at 12th byte. Check if this is fine.
+        this.#ssrcStats[ssrc].payloadBytesSent += rtpPacket.length - 12;
+        console.log('SSRC:', ssrc, 'Packets Sent:', this.#ssrcStats[ssrc].packetsSent, 'Payload Bytes Sent:', this.#ssrcStats[ssrc].payloadBytesSent);
     }
 
     #getCurrentRTPTime(ssrc){
