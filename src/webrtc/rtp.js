@@ -150,7 +150,7 @@ class RTPContext{
         const ssrc = rtpPacket.readUInt32BE(8);
         const seqNo = rtpPacket.readUInt16BE(2);
 
-        const rtpTimestamp = rtpPacket.readUInt32BE(4);
+        const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
         
 
         if(!this.#ssrcStats[ssrc]){
@@ -158,9 +158,6 @@ class RTPContext{
             this.#initSequenceNo(ssrc, seqNo);
             //this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
             this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
-
-            this.#ssrcStats[ssrc].baseRTPTimestamp = rtpTimestamp;
-            this.#ssrcStats[ssrc].baseWallclockTime = performance.now();
 
             this.#ssrcStats[ssrc].clockRate = 90000;
         }
@@ -175,14 +172,15 @@ class RTPContext{
             return;
         }
 
-        const arrivalRTPTime = this.#getCurrentRTPTime(ssrc);
+        const arrivalWallclockTime = performance.now();
 
-        //console.log('RTP Time:', rtpTimestamp, 'Arrival Time:', arrivalRTPTime);
-        if(this.#ssrcStats[ssrc].lastRTPTimestamp && this.#ssrcStats[ssrc].lastArrivalRTPTimestamp){
-            const dCurrent = arrivalRTPTime - rtpTimestamp;
-            const dPrevious = this.#ssrcStats[ssrc].lastArrivalRTPTimestamp - this.#ssrcStats[ssrc].lastRTPTimestamp;
+        if(this.#ssrcStats[ssrc].lastArrivalWallclockTime && this.#ssrcStats[ssrc].lastDepartureRTPTimestamp){
+            const arrivalTimeDiffMS = arrivalWallclockTime - this.#ssrcStats[ssrc].lastArrivalWallclockTime;
+            const arrivalTimeDiffRTPUnits = (arrivalTimeDiffMS / 1000) * this.#ssrcStats[ssrc].clockRate;
 
-            const currentJitter = Math.abs(dCurrent - dPrevious);
+            const departureTimeDiffRTPUnits = departureRTPTimestamp - this.#ssrcStats[ssrc].lastDepartureRTPTimestamp;
+
+            const currentJitter = Math.abs(arrivalTimeDiffRTPUnits - departureTimeDiffRTPUnits);
 
             if(!this.#ssrcStats[ssrc].jitter){
                 this.#ssrcStats[ssrc].jitter = currentJitter;
@@ -192,8 +190,8 @@ class RTPContext{
             }
         }
 
-        this.#ssrcStats[ssrc].lastRTPTimestamp = rtpTimestamp;
-        this.#ssrcStats[ssrc].lastArrivalRTPTimestamp = arrivalRTPTime;
+        this.#ssrcStats[ssrc].lastArrivalWallclockTime = arrivalWallclockTime;
+        this.#ssrcStats[ssrc].lastDepartureRTPTimestamp = departureRTPTimestamp;
 
         this.rtpPacketReadyForApplicationCallback(rtpPacket);
     }
@@ -383,16 +381,6 @@ class RTPContext{
         // TODO: payload may not always start at 12th byte. Check if this is fine.
         this.#ssrcStats[ssrc].payloadBytesSent += rtpPacket.length - 12;
         console.log('SSRC:', ssrc, 'Packets Sent:', this.#ssrcStats[ssrc].packetsSent, 'Payload Bytes Sent:', this.#ssrcStats[ssrc].payloadBytesSent);
-    }
-
-    #getCurrentRTPTime(ssrc){
-        const ssrcStats = this.#ssrcStats[ssrc];
-        const wallclockTime = performance.now();
-        //console.log('Wallclock Time:', wallclockTime, 'Base Wallclock Time:', ssrcStats.baseWallclockTime, ssrcStats, ssrc);
-        const timeDiffSec = (wallclockTime - ssrcStats.baseWallclockTime) / 1000
-        const timeDiffRTPUnits = timeDiffSec * ssrcStats.clockRate;
-        const currentRTPTime = ssrcStats.baseRTPTimestamp + timeDiffRTPUnits;
-        return currentRTPTime;
     }
 
 }
