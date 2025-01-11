@@ -116,14 +116,14 @@ class PeerContext{
         let sdp = '';
         sdp += 'v=0\r\n';
         sdp += 'o=- 0 0 IN IP4 127.0.0.1\r\n';
-        sdp += 's=-\r\n';
+        sdp += 's=NODEPEER\r\n';
         sdp += 't=0 0\r\n';
         //answer += 'a=group:BUNDLE 0\r\n';
-        sdp += 'a=msid-semantic:WMS *\r\n';
+        // sdp += 'a=msid-semantic:WMS *\r\n';
         sdp += 'm=video 9 UDP/TLS/RTP/SAVP 96\r\n';
-        sdp += 'a=mid:0\r\n'
-        sdp += 'c=IN IP4 0.0.0.0\r\n';
-        sdp += 'a=rtcp:9 IN IP4 0.0.0.0\r\n';
+        //sdp += 'a=mid:0\r\n'
+        //sdp += 'c=IN IP4 0.0.0.0\r\n';
+        //sdp += 'a=rtcp:9 IN IP4 0.0.0.0\r\n';
         sdp += 'a=ice-ufrag:' + selfUfrag + '\r\n';
         sdp += 'a=ice-pwd:' + selfPwd + '\r\n';
     
