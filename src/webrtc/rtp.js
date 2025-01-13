@@ -13,24 +13,26 @@ class RTPContext{
     static #RTP_SEQ_MOD = 1 << 16 
 
     #ssrcStats = {};
-    #knownRTPPayloadTypes = new Set([96, 97]);
+    knownRTPPayloadTypes = null;
 
     /**
      * 
      * @param {Object} Params
      * @param {Function} Params.onPacketReadyToSend - Callback that will be called when a packet needs to be sent to the remote peer.
-     * For every call of `sendPacketToRemote`, the SRTPContext will call `onPacketReadyToSend` with the encrypted SRTP packet
+     * For every call of `handleOutgoingPacketToRemote`, the SRTPContext will call `onPacketReadyToSend` with the encrypted SRTP packet
      * 
      * @param {Function} Params.onRTPPacketReadyForApplication - Callback that will be called when an RTP packet is ready to be used by the application
      * For every call of `handlePacketFromRemote`, the SRTPContext will call `onRTPPacketReadyForApplication` with the decrypted RTP packet
      * 
      */
-    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication}){
+    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes}){
         this.sendPacketToRemoteCallback = onPacketReadyToSend;
         this.rtpPacketReadyForApplicationCallback = onRTPPacketReadyForApplication;
+        this.knownRTPPayloadTypes = payloadTypes;
+        console.log('RTP init | Known RTP Payload types:', this.knownRTPPayloadTypes);
     }
     
-    handlePacketFromRemote(packet, remote){
+    handleIncomingPacketFromRemote(packet, remote){
 
         const version = packet[0] >> 6;
         if(version != 2){
@@ -61,7 +63,7 @@ class RTPContext{
             return false;
         }
 
-        if(!this.#knownRTPPayloadTypes.has(payloadType)){
+        if(!this.knownRTPPayloadTypes[payloadType]){
             console.error('Unknown payload type');
             return false;
         }
@@ -135,7 +137,7 @@ class RTPContext{
             }
         }
         else{
-            console.log('out of order')
+            console.log('out of order', ssrc, currentSeqNo)
         }
 
         ssrcStats.packetsReceived += 1;
@@ -153,7 +155,7 @@ class RTPContext{
         const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
         
 
-        if(!this.#ssrcStats[ssrc]){
+        if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
             console.log('First packet for SSRC:', ssrc);
             this.#initSequenceNo(ssrc, seqNo);
             //this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
@@ -193,16 +195,16 @@ class RTPContext{
         this.#ssrcStats[ssrc].lastArrivalWallclockTime = arrivalWallclockTime;
         this.#ssrcStats[ssrc].lastDepartureRTPTimestamp = departureRTPTimestamp;
 
-        this.rtpPacketReadyForApplicationCallback(rtpPacket);
+        this.rtpPacketReadyForApplicationCallback(rtpPacket, this);
     }
 
     handleRTCP(rtcpPacket){
         const padding = (rtcpPacket[0] >> 5) & 0b1;
         const rrc = rtcpPacket[0] & 0b00011111;
         
-        const payloadType = rtcpPacket[1];
+        const packetType = rtcpPacket[1];
 
-        if(payloadType == 200){
+        if(packetType == 200){
             
             const ssrc = rtcpPacket.readUInt32BE(4);
 
@@ -213,9 +215,13 @@ class RTPContext{
             const rtpTimestamp = rtcpPacket.readUInt32BE(16);
             const packetCount = rtcpPacket.readUInt32BE(20);
             const octetCount = rtcpPacket.readUInt32BE(24);
-            //console.log(`SR (pkt len: ${rtcpPacket.length}) Padding: ${padding} | RRC: ${rrc} | Length: ${length} | SSRC: ${ssrc} | NTP: ${(new Date(ntpToTimeMs(ntpTimestampMSB, ntpTimestampLSB))).toLocaleString()} | RTP TS: ${rtpTimestamp} | Packet Count: ${packetCount} | Octet Count: ${octetCount}`);
-            //console.log('got SR, sending Rreceiver Report');
+            //console.log(`NTP: ${(new Date(ntpToTimeMs(ntpTimestampMSB, ntpTimestampLSB))).toLocaleString()} | RTP TS: ${rtpTimestamp}`);
 
+            if(!this.#ssrcStats[ssrc]){
+                console.log('First RTCP packet for SSRC:', ssrc);
+                this.#ssrcStats[ssrc] = {}
+            }
+            
             this.#ssrcStats[ssrc].lastSR = {
                 timestamp: performance.now(),
                 ntpTimestampMSB,
@@ -226,17 +232,18 @@ class RTPContext{
             }
 
             const receiverReport = this.generateReceiverReport(ssrc);
-            this.sendPacketToRemote(receiverReport);
+            this.handleOutgoingPacketToRemote(receiverReport);
+            this.rtpPacketReadyForApplicationCallback(rtcpPacket, this);
 
         }
-        else if (payloadType == 201){
+        else if (packetType == 201){
             const length = rtcpPacket.readUInt16BE(2);
             const ssrc = rtcpPacket.readUInt32BE(4);
             //console.log(`RR (pkt len: ${rtcpPacket.length}) Padding: ${padding} | RRC: ${rrc} | Length: ${length} | SSRC: ${ssrc}`);
 
         }
         else{
-            this.rtpPacketReadyForApplicationCallback(rtcpPacket);
+            this.rtpPacketReadyForApplicationCallback(rtcpPacket, this);
         }
     }
 
@@ -357,30 +364,48 @@ class RTPContext{
         return buffer;
     }
 
-    sendPacketToRemote(packet){
+    handleOutgoingPacketToRemote(packet, sourceContext){
         const payloadType = packet[1] & 0b01111111;
-        if(this.#knownRTPPayloadTypes.has(payloadType)){
-            this.processRTPBeforeSending(packet);
+        if(this.knownRTPPayloadTypes[payloadType]){
+            packet = this.processRTPBeforeSending(packet, sourceContext);
         }
 
         this.sendPacketToRemoteCallback(packet);
     }
 
-    processRTPBeforeSending(rtpPacket){
+    processRTPBeforeSending(rtpPacket, sourceContext){
+
+        const payloadTypeInPacket = rtpPacket[1] & 0b01111111;
+        const codec = sourceContext.knownRTPPayloadTypes[payloadTypeInPacket];
+
+        const expectedPayloadType = Object.keys(this.knownRTPPayloadTypes).find(key => this.knownRTPPayloadTypes[key] == codec);
+
+        if(payloadTypeInPacket != expectedPayloadType){
+
+            // clone packet
+            rtpPacket = Buffer.from(rtpPacket);
+
+            let temp = rtpPacket[1] & 0b10000000;
+            temp |= expectedPayloadType;
+            rtpPacket[1] = temp;
+        }
+
         const ssrc = rtpPacket.readUInt32BE(8);
         if(!this.#ssrcStats[ssrc]){
             this.#ssrcStats[ssrc] = {
                 packetsSent: 0,
                 payloadBytesSent: 0,
                 baseWallclockTime: performance.now(),
-
+                baseRTPTimestamp: rtpPacket.readUInt32BE(4),
             }
         }
 
         this.#ssrcStats[ssrc].packetsSent += 1;
         // TODO: payload may not always start at 12th byte. Check if this is fine.
         this.#ssrcStats[ssrc].payloadBytesSent += rtpPacket.length - 12;
-        console.log('SSRC:', ssrc, 'Packets Sent:', this.#ssrcStats[ssrc].packetsSent, 'Payload Bytes Sent:', this.#ssrcStats[ssrc].payloadBytesSent);
+        //console.log('SSRC:', ssrc, 'Packets Sent:', this.#ssrcStats[ssrc].packetsSent, 'Payload Bytes Sent:', this.#ssrcStats[ssrc].payloadBytesSent);
+
+        return rtpPacket
     }
 
 }

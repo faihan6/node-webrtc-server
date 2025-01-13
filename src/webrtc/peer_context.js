@@ -29,20 +29,6 @@ class PeerContext{
     #srtpContext = null;
 
     constructor(){
-
-        if(globalThis.disableWebRTCEncryption){
-            this.#srtpContext = new RTPContext({
-                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
-                onRTPPacketReadyForApplication: this.#processPacket.bind(this)
-            });
-        }
-        else{
-            this.#srtpContext = new SRTPContext({
-                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
-                onRTPPacketReadyForApplication: this.#processPacket.bind(this)
-            });
-            this.dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
-        }
     }
 
     async generateAnswer(offer) {
@@ -75,7 +61,42 @@ class PeerContext{
         const remotePwd = offer.sdp.match(/a=ice-pwd:(.*)/)[1];
         this.iceContext.setRemoteUfragAndPassword(remoteUfrag, remotePwd);
     
-        // 3. Get the certificate fingerprint from the offer
+        const selfUfrag = this.iceContext.selfUfrag
+        const selfPwd = this.iceContext.selfPwd
+
+        const mBlockStartIndex = offer.sdp.indexOf('m=');
+        const remoteDirection = offer.sdp.slice(mBlockStartIndex).match(/a=sendrecv|a=recvonly|a=sendonly|a=inactive/)[0];
+        const selfDirection = (remoteDirection == 'a=sendonly') ? 'a=recvonly' : 
+                                (remoteDirection == 'a=recvonly') ? 'a=sendonly' : 
+                                remoteDirection;
+
+        const payloadTypes = {};
+        offer.sdp.split('\r\n').forEach(line => {
+            if (line.startsWith('a=rtpmap')) {
+                const payloadType = line.match(/a=rtpmap:(\d+)/)[1];
+                const codec = line.split(' ')[1]
+                payloadTypes[payloadType] = codec;
+            }
+        });
+
+        console.log('Payload types:', payloadTypes);
+
+        if(globalThis.disableWebRTCEncryption){
+            this.#srtpContext = new RTPContext({
+                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
+                onRTPPacketReadyForApplication: this.#processPacket.bind(this),
+                payloadTypes
+            });
+        }
+        else{
+            this.#srtpContext = new SRTPContext({
+                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
+                onRTPPacketReadyForApplication: this.#processPacket.bind(this),
+                payloadTypes
+            });
+            this.dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
+        }
+
         const certificateFPInOffer = offer.sdp.match(/a=fingerprint:(.*)/);
         if(certificateFPInOffer){
             if(globalThis.disableWebRTCEncryption){
@@ -94,15 +115,6 @@ class PeerContext{
                 throw new Error('Fingerprint not found in offer. Rejecting');
             }
         }
-    
-        // 4. get ICE ufrag and pwd for self
-        const selfUfrag = this.iceContext.selfUfrag
-        const selfPwd = this.iceContext.selfPwd
-
-        const remoteDirection = offer.sdp.match(/a=sendrecv|a=recvonly|a=sendonly|a=inactive/)[0];
-        const selfDirection = (remoteDirection == 'a=sendonly') ? 'a=recvonly' : 
-                                (remoteDirection == 'a=recvonly') ? 'a=sendonly' : 
-                                remoteDirection;
 
         this.selfDirection = selfDirection;
         this.remoteDirection = remoteDirection;
@@ -121,9 +133,9 @@ class PeerContext{
         //answer += 'a=group:BUNDLE 0\r\n';
         // sdp += 'a=msid-semantic:WMS *\r\n';
         sdp += 'm=video 9 UDP/TLS/RTP/SAVP 96\r\n';
-        //sdp += 'a=mid:0\r\n'
-        //sdp += 'c=IN IP4 0.0.0.0\r\n';
-        //sdp += 'a=rtcp:9 IN IP4 0.0.0.0\r\n';
+        sdp += 'a=mid:0\r\n'
+        sdp += 'c=IN IP4 0.0.0.0\r\n';
+        sdp += 'a=rtcp:9 IN IP4 0.0.0.0\r\n';
         sdp += 'a=ice-ufrag:' + selfUfrag + '\r\n';
         sdp += 'a=ice-pwd:' + selfPwd + '\r\n';
     
@@ -146,8 +158,8 @@ class PeerContext{
         // answer += 'a=rtcp-fb:96 goog-remb\r\n';
         // answer += 'a=rtcp-fb:96 transport-cc\r\n';
         // answer += 'a=rtcp-fb:96 ccm fir\r\n';
-        // answer += 'a=rtcp-fb:96 nack\r\n';
-        // answer += 'a=rtcp-fb:96 nack pli\r\n';
+        sdp += 'a=rtcp-fb:96 nack\r\n';
+        sdp += 'a=rtcp-fb:96 nack pli\r\n';
     
         //console.log('\n\nanswer:\n', sdp); 
     
@@ -170,33 +182,34 @@ class PeerContext{
             this.iceContext.sendPacket(response, remote);
         }
         if(packet.at(0) >> 6 == 0x02){
-            this.#srtpContext.handlePacketFromRemote(packet, remote);
+            this.#srtpContext.handleIncomingPacketFromRemote(packet, remote);
         }
     }
 
-    #processPacket(packet){
-        const payloadType = packet.readUInt8(1) & 0b01111111;
+    #processPacket(packet, sourceContext){
+        const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
+        const rtcpPacketType = packet.readUInt8(1);
 
-        if(payloadType == 96){
-            this.#handleRTPPacket(packet);
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            this.#handleRTPPacket(packet, sourceContext);
         }
-        else{
-            this.#handleRTCPPacket(packet)
+        else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
+            this.#handleRTCPPacket(packet, sourceContext)
             
         }
        
     }
 
-    #handleRTPPacket(packet){
+    #handleRTPPacket(packet, sourceContext){
         const ssrc = packet.readUInt32BE(8);
         this.#initStreams(ssrc);
 
         //console.log('RTP SSRC:', ssrc);
-        this.#remoteSSRCStreams[null].rtp.write(packet);
-        this.#remoteSSRCStreams[ssrc].rtp.write(packet);
+        this.#remoteSSRCStreams[null].rtp.write(packet, sourceContext);
+        this.#remoteSSRCStreams[ssrc].rtp.write(packet, sourceContext);
     }
 
-    #handleRTCPPacket(packet){
+    #handleRTCPPacket(packet, sourceContext){
         const lengthInBytes = (packet.readUInt16BE(2) + 1) * 4;
         //console.log(`\nRTCP packet arrived. length specified in packet: ${lengthInBytes}, bufferLength: ${packet.length}`);
         //console.log('RTCP packet:', packet);
@@ -210,7 +223,7 @@ class PeerContext{
                 const rtpPacketLengthBytes = (packet.readUInt16BE(startIndex + 2) + 1) * 4;
                 const rtpPacketBuffer = packet.slice(startIndex, startIndex + rtpPacketLengthBytes);
 
-                this.#handleSingleRTCPPacket(rtpPacketBuffer);
+                this.#handleSingleRTCPPacket(rtpPacketBuffer, sourceContext);
 
                 startIndex += rtpPacketLengthBytes;
                 if(startIndex == packet.length){
@@ -220,11 +233,11 @@ class PeerContext{
         }
     }
 
-    #handleSingleRTCPPacket(packet){
+    #handleSingleRTCPPacket(packet, sourceContext){
         let ssrc;
 
-        const payloadType = packet.readUInt8(1) & 0b01111111;
-        if(payloadType == 201){
+        const packetType = packet.readUInt8(1) & 0b01111111;
+        if(packetType == 201){
             ssrc = packet.readUInt32BE(8);
         }
         else{
@@ -234,8 +247,8 @@ class PeerContext{
         this.#initStreams(ssrc);
 
         //console.log('RTCP SSRC:', ssrc);
-        this.#remoteSSRCStreams[null].rtcpEvents.write(packet);
-        this.#remoteSSRCStreams[ssrc].rtcpEvents.write(packet);
+        this.#remoteSSRCStreams[null].rtcpEvents.write(packet, sourceContext);
+        this.#remoteSSRCStreams[ssrc].rtcpEvents.write(packet, sourceContext);
     }
 
     #initStreams(ssrc){
@@ -261,17 +274,17 @@ class PeerContext{
 
     addRTPStream(stream){
         console.log('Adding RTP stream to peer context');
-        stream.addEventListener('data', (data) => {
+        stream.addEventListener('data', (data, sourceContext) => {
             //console.log('RTP from remote arrived, writing to wire..')
-            this.#srtpContext.sendPacketToRemote(data);
+            this.#srtpContext.handleOutgoingPacketToRemote(data, sourceContext);
         })
     }
 
     addRTCPEventsStream(stream){
         console.log('Adding RTCP Events stream to peer context');
-        stream.addEventListener('data', (data) => {
+        stream.addEventListener('data', (data, sourceContext) => {
             //console.log('RTCP arrived, writing to wire..')
-            this.#srtpContext.sendPacketToRemote(data);
+            this.#srtpContext.handleOutgoingPacketToRemote(data, sourceContext);
         })
     }
 

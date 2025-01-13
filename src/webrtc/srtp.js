@@ -55,8 +55,8 @@ class SRTPContext extends RTPContext{
 
     srtcpIndexCount = {}
 
-    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication}){
-        super({onPacketReadyToSend, onRTPPacketReadyForApplication});
+    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes}){
+        super({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes});
     }
 
 
@@ -201,7 +201,7 @@ class SRTPContext extends RTPContext{
     
     }
     
-    handlePacketFromRemote(packet, remote){
+    handleIncomingPacketFromRemote(packet, remote){
 
         const version = packet[0] >> 6;
         if(version != 2){
@@ -223,7 +223,7 @@ class SRTPContext extends RTPContext{
         else{
             decrypted = this.decryptSRTCP(packet, this.srtpParams.clientKeys);      
         }
-        super.handlePacketFromRemote(decrypted);
+        super.handleIncomingPacketFromRemote(decrypted);
 
     }
 
@@ -361,7 +361,7 @@ class SRTPContext extends RTPContext{
          
     }
 
-    sendPacketToRemote(packet){
+    handleOutgoingPacketToRemote(packet, sourceContext){
 
         if(!Object.keys(this.srtpParams.serverKeys).length){
             console.error('SRTP keys not set');
@@ -371,14 +371,23 @@ class SRTPContext extends RTPContext{
 
         let encryptedPacket;
         let type;
-        if((packet[1] & 0b01111111) == 96){
-            type = 'RTP';
-            this.processRTPBeforeSending(packet);
-            encryptedPacket = this.encryptRTP(packet, this.srtpParams.serverKeys);
-        }
-        else{
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1];
+        
+        if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
             type = 'RTCP';
             encryptedPacket = this.encryptRTCP(packet, this.srtpParams.serverKeys);
+        }
+        else if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            packet = this.processRTPBeforeSending(packet, sourceContext);
+            const newPayloadType = packet[1] & 0b01111111;
+            if(this.knownRTPPayloadTypes[newPayloadType]){
+                type = 'RTP';  
+                encryptedPacket = this.encryptRTP(packet, this.srtpParams.serverKeys);
+            }
+            else{
+                console.error('Unknown payload type even after processing', newPayloadType, 'known types:', this.knownRTPPayloadTypes, packet);
+            }
         }
 
         this.sendPacketToRemoteCallback(encryptedPacket);

@@ -6,9 +6,9 @@ class SimpleStream extends CustomEventTarget{
         super();
     }
     
-    write(data){
+    write(...data){
         // console.log('Writing data to stream');
-        this.dispatchEvent('data', data);
+        this.dispatchEvent('data', ...data);
     }
 
 }
