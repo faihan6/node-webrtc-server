@@ -33,7 +33,7 @@ class ICEContext{
 
     getCandidates(){
         const address = this.udpSocket.address();
-        return [`a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host generation 0 network-id 1 network-cost 10\r\n`]
+        return [`a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`]
     }
 
     setRemoteUfragAndPassword(remoteUfrag, remotePwd){

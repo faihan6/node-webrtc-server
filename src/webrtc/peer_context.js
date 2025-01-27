@@ -9,6 +9,9 @@ class PeerContext{
 
     remoteCertificateFingerprint = null;
 
+    /**
+     * We support only BUNDLEing, so there is only one ice context per peer
+     */
     iceContext = new ICEContext({onPacketReceived: this.allocatePacketToAppropriateMethod.bind(this)});
 
     // TODO: direction is a property of transceiver, not peer itself. need to change it.
@@ -27,6 +30,8 @@ class PeerContext{
 
     dtlsContext = null;
     #srtpContext = null;
+
+    #transceivers = {};
 
     constructor(){
     }
@@ -81,22 +86,6 @@ class PeerContext{
 
         console.log('Payload types:', payloadTypes);
 
-        if(globalThis.disableWebRTCEncryption){
-            this.#srtpContext = new RTPContext({
-                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
-                onRTPPacketReadyForApplication: this.#processPacket.bind(this),
-                payloadTypes
-            });
-        }
-        else{
-            this.#srtpContext = new SRTPContext({
-                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
-                onRTPPacketReadyForApplication: this.#processPacket.bind(this),
-                payloadTypes
-            });
-            this.dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
-        }
-
         const certificateFPInOffer = offer.sdp.match(/a=fingerprint:(.*)/);
         if(certificateFPInOffer){
             if(globalThis.disableWebRTCEncryption){
@@ -130,7 +119,7 @@ class PeerContext{
         sdp += 'o=- 0 0 IN IP4 127.0.0.1\r\n';
         sdp += 's=NODEPEER\r\n';
         sdp += 't=0 0\r\n';
-        //answer += 'a=group:BUNDLE 0\r\n';
+        sdp += 'a=group:BUNDLE 0\r\n';
         // sdp += 'a=msid-semantic:WMS *\r\n';
         sdp += 'm=video 9 UDP/TLS/RTP/SAVP 96\r\n';
         sdp += 'a=mid:0\r\n'
@@ -155,19 +144,140 @@ class PeerContext{
         sdp += 'a=rtcp-mux\r\n';
         sdp += 'a=rtcp-rsize\r\n';
         sdp += 'a=rtpmap:96 VP8/90000\r\n';
-        // answer += 'a=rtcp-fb:96 goog-remb\r\n';
-        // answer += 'a=rtcp-fb:96 transport-cc\r\n';
-        // answer += 'a=rtcp-fb:96 ccm fir\r\n';
+
         sdp += 'a=rtcp-fb:96 nack\r\n';
         sdp += 'a=rtcp-fb:96 nack pli\r\n';
+
+        const offeredExtensions = [];
+        offer.sdp.split('\r\n').forEach(line => {
+            if (line.startsWith('a=extmap')) {
+                offeredExtensions.push(line);
+            }
+        });
+        console.log('Offered extensions:', offeredExtensions);
+
+        const supportedExtensions = [
+            'urn:ietf:params:rtp-hdrext:sdes:mid',
+        ];
+
+        const negotiatedExtensionsList = offeredExtensions.filter(offeredExtension => supportedExtensions.some(supportedExtension => offeredExtension.includes(supportedExtension)));
+
+        console.log('Negotiated extensions:', negotiatedExtensionsList);
+
+
+
+        // const midExtLine = offeredExtensions.find(ext => ext.includes('urn:ietf:params:rtp-hdrext:sdes:mid'));
+        // if(midExtLine){
+        //     sdp += midExtLine + '\r\n';
+        // }
     
-        //console.log('\n\nanswer:\n', sdp); 
-    
+
+        if(globalThis.disableWebRTCEncryption){
+            this.#srtpContext = new RTPContext({
+                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
+                onRTPPacketReadyForApplication: this.#processPacket.bind(this),
+                payloadTypes
+            });
+        }
+        else{
+            this.#srtpContext = new SRTPContext({
+                onPacketReadyToSend: this.iceContext.sendPacket.bind(this.iceContext),
+                onRTPPacketReadyForApplication: this.#processPacket.bind(this),
+                payloadTypes
+            });
+            this.dtlsContext = new DTLSContext({onDTLSParamsReady: this.#srtpContext.initSRTP.bind(this.#srtpContext)});
+        }
+
+
         return sdp;
     
     
     
     
+    }
+
+    async generateAnswer2(offer) {
+
+        let sdp = '';
+        sdp += 'v=0\r\n';
+        sdp += 'o=- 0 0 IN IP4 127.0.0.1\r\n';
+        sdp += 's=NODEPEER\r\n';
+        sdp += 't=0 0\r\n';
+
+        // 1. extract all the candidates from the offer
+        const remoteCandidates = [];
+        offer.sdp.split('\r\n').forEach(line => {
+            if (line.startsWith('a=candidate')) {
+                remoteCandidates.push(line);
+            }
+        });
+
+        // 2. Add the self candidate to answer
+        for(const candidateStr of this.iceContext.getCandidates()){
+            sdp += candidateStr;
+        }
+
+    
+        // 3. Get remote ICE ufrag and pwd from the offer
+        const remoteUfrag = offer.sdp.match(/a=ice-ufrag:(.*)/)[1];
+        const remotePwd = offer.sdp.match(/a=ice-pwd:(.*)/)[1];
+        this.iceContext.setRemoteUfragAndPassword(remoteUfrag, remotePwd);
+
+        // 4. Add self ICE ufrag and pwd to answer
+        const selfUfrag = this.iceContext.selfUfrag
+        const selfPwd = this.iceContext.selfPwd
+        sdp += 'a=ice-ufrag:' + selfUfrag + '\r\n';
+        sdp += 'a=ice-pwd:' + selfPwd + '\r\n';
+
+        
+        const certificateFPInOffer = offer.sdp.match(/a=fingerprint:(.*)/);
+        if(certificateFPInOffer){
+
+            // 5. Get the certificate fingerprint from the offer
+            const remoteCertificateFingerprint = certificateFPInOffer[1];
+            this.dtlsContext = new DTLSContext({onDTLSParamsReady: this.handleDTLSParamsReady.bind(this)});
+            this.dtlsContext.setRemoteFingerprint(remoteCertificateFingerprint);
+
+
+            // 6. Add the self certificate fingerprint to answer
+            const fp = this.formatFingerprint(await getFingerprintOfCertificate())
+            console.log('our fingerprint', fp);
+            sdp +=  (fp) + '\r\n';
+        }
+        else{
+            if(globalThis.disableWebRTCEncryption){
+                console.log('No fingerprint in the offer. Remote Peer wants no encryption')
+            }
+            else{
+                throw new Error('Fingerprint not found in offer. Rejecting');
+            }
+        }
+
+
+        
+        const mBlocks = offer.sdp.split('m=').slice(1);
+        for(const mBlock of mBlocks){
+            const mediaType = mBlock.split(' ')[0];
+            console.log('mBlock:', mediaType);
+
+            const mid = mBlock.match(/a=mid:(.*)/)[1];
+            const remoteDirection = mBlock.match(/a=sendrecv|a=recvonly|a=sendonly|a=inactive/)[0];
+            const selfDirection = (remoteDirection == 'a=sendonly') ? 'a=recvonly' :
+                                    (remoteDirection == 'a=recvonly') ? 'a=sendonly' :
+                                    remoteDirection;
+
+            const tx = new Transceiver(mid, mediaType, selfDirection);
+            this.#transceivers[mid] = tx;
+
+
+        }
+
+
+
+    }
+
+    handleDTLSParamsReady(params){
+        this.#srtpContext.initSRTP(params);
     }
 
     formatFingerprint(hash) {

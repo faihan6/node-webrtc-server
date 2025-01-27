@@ -25,10 +25,11 @@ class RTPContext{
      * For every call of `handlePacketFromRemote`, the SRTPContext will call `onRTPPacketReadyForApplication` with the decrypted RTP packet
      * 
      */
-    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes}){
+    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes, extensions}){
         this.sendPacketToRemoteCallback = onPacketReadyToSend;
         this.rtpPacketReadyForApplicationCallback = onRTPPacketReadyForApplication;
         this.knownRTPPayloadTypes = payloadTypes;
+        this.extensions = extensions;
         console.log('RTP init | Known RTP Payload types:', this.knownRTPPayloadTypes);
     }
     
@@ -39,15 +40,14 @@ class RTPContext{
             console.error('Invalid version');
             return;
         }
-    
-        const payloadType = packet[1] & 0b01111111;
+
+        const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
     
     
         //console.log(`${currentTime}: ${type} - Ver: ${version} | Padding: ${padding} | Ext: ${extension} | CSRCCount: ${csrcCount} | Mbit: ${marker} | PT: ${payloadType} | SeqNo: ${sequenceNumber} | time: ${timestamp} | SSRC: ${ssrc}`);
     
-        if(payloadType == 96){
+        if(this.knownRTPPayloadTypes[rtpPayloadType]){
             this.#handleRTP(packet);
-
         }
         else{
             this.handleRTCP(packet);
@@ -147,33 +147,7 @@ class RTPContext{
         
     }
 
-    #handleRTP(rtpPacket){
-
-        const ssrc = rtpPacket.readUInt32BE(8);
-        const seqNo = rtpPacket.readUInt16BE(2);
-
-        const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
-        
-
-        if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
-            console.log('First packet for SSRC:', ssrc);
-            this.#initSequenceNo(ssrc, seqNo);
-            //this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
-            this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
-
-            this.#ssrcStats[ssrc].clockRate = 90000;
-        }
-        else{
-            this.#updateSequenceNo(ssrc, seqNo);
-        }
-        
-
-        // validate RTP header
-        if(!this.#validateRTPHeader(rtpPacket)){
-            console.error('Invalid RTP header');
-            return;
-        }
-
+    #updateJitter(ssrc, departureRTPTimestamp){
         const arrivalWallclockTime = performance.now();
 
         if(this.#ssrcStats[ssrc].lastArrivalWallclockTime && this.#ssrcStats[ssrc].lastDepartureRTPTimestamp){
@@ -194,6 +168,92 @@ class RTPContext{
 
         this.#ssrcStats[ssrc].lastArrivalWallclockTime = arrivalWallclockTime;
         this.#ssrcStats[ssrc].lastDepartureRTPTimestamp = departureRTPTimestamp;
+    }
+
+    /**
+     * 
+     * @typedef {Object} HeaderExtensionsInfo
+     * @property {Boolean} areExtensionsPresent - Boolean indicating if header extensions are present.
+     * @property {Number} extensionsBufferLength - Length of the buffer containing the header extensions. Includes the 0xBEDE header, the extensions and the padding
+     */
+    
+    /** 
+     * @param {*} rtpPacket 
+     * @returns {HeaderExtensionsInfo} Information about the header extensions
+     */
+    handleHeaderExtensions(rtpPacket){
+        // parse header extensions
+        const areExtensionsPresent = rtpPacket[0] & 0b00010000;
+
+        /**
+         * includes the 0xBEDE header, the extensions and the padding
+         */
+        let extensionsBufferLength = 0;
+
+        if(areExtensionsPresent){
+            const isOneByteHeaderMode = rtpPacket.readUInt16BE(12) == 0xBEDE;
+            const extensionLength = rtpPacket.readUInt16BE(14);
+
+            let start = 16;
+            for(let i = 0; i < extensionLength; i++){
+                const extId = (rtpPacket[start] & 0b11110000) >> 4;
+                const extLength = (rtpPacket[start] & 0b00001111) + 1;
+                const extValue = rtpPacket.slice(start + 1, start + 1 + extLength);
+                console.log(rtpPacket[start], 'Extension:', extId, extLength, extValue);
+
+                start += 1 + extLength;
+            }
+            
+            // padding
+            const padding = 4 - (start % 4);
+
+            extensionsBufferLength = (start + padding) - 12;
+
+            console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
+            
+        }
+
+        
+        return {
+            areExtensionsPresent,
+            extensionsBufferLength
+        }
+    }
+
+    #handleRTP(rtpPacket){
+
+        const ssrc = rtpPacket.readUInt32BE(8);
+        const seqNo = rtpPacket.readUInt16BE(2);
+
+        // handle sequence number
+        if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
+            console.log('First packet for SSRC:', ssrc);
+            this.#initSequenceNo(ssrc, seqNo);
+            //this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
+            this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
+
+            this.#ssrcStats[ssrc].clockRate = 90000;
+        }
+        else{
+            this.#updateSequenceNo(ssrc, seqNo);
+        }
+        
+
+        // validate RTP header
+        if(!this.#validateRTPHeader(rtpPacket)){
+            console.error('Invalid RTP header');
+            return;
+        }
+
+        // update inter-arrival jitter
+        const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
+        this.#updateJitter(ssrc, departureRTPTimestamp);
+
+        // parse headers
+        const extensionsInfo = super.handleHeaderExtensions(packet);
+        console.log('Extensions Info:', extensionsInfo);
+
+        
 
         this.rtpPacketReadyForApplicationCallback(rtpPacket, this);
     }

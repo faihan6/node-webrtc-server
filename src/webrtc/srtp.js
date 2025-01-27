@@ -201,7 +201,7 @@ class SRTPContext extends RTPContext{
     
     }
     
-    handleIncomingPacketFromRemote(packet, remote){
+    handleIncomingPacketFromRemote(packet){
 
         const version = packet[0] >> 6;
         if(version != 2){
@@ -237,12 +237,16 @@ class SRTPContext extends RTPContext{
         const ssrcBuffer = Buffer.alloc(4);
         ssrcBuffer.writeUIntBE(ssrc, 0, 4);
 
+        const extensionsInfo = super.handleHeaderExtensions(packet);
+
         const index = this.predictRTPIndex(ssrc, sequenceNumber);
         const indexBuffer = Buffer.alloc(6);
         indexBuffer.writeUIntBE(index, 0, 6);
     
         const iv = this.getIV(keys.srtpSaltKey, ssrcBuffer, indexBuffer);
-        const encryptedPayload = packet.slice(12, packet.length - 10);
+
+        const encryptedPayloadStart = 12 + extensionsInfo.extensionsBufferLength;
+        const encryptedPayload = packet.slice(encryptedPayloadStart, packet.length - 10);
         const authTag = packet.slice(packet.length - 10);
     
         // verify auth tag
