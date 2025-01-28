@@ -46,7 +46,7 @@ setInterval(() => {
 
         prevData = {eventLoopDelay, maxEventLoopDelay, userCPUtime, systemCPUtime};
 
-        console.log(`Event loop delay: ${eventLoopDelay.toFixed(2)} ms | Max Event loop delay: ${maxEventLoopDelay.toFixed(2)} ms | User CPU time diff: ${userCPUtimeDiff.toFixed(2)} ms | System CPU time diff: ${systemCPUtimeDiff.toFixed(2)} ms`);
+        //console.log(`Event loop delay: ${eventLoopDelay.toFixed(2)} ms | Max Event loop delay: ${maxEventLoopDelay.toFixed(2)} ms | User CPU time diff: ${userCPUtimeDiff.toFixed(2)} ms | System CPU time diff: ${systemCPUtimeDiff.toFixed(2)} ms`);
     }
 
 
