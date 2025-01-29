@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const {Offset} = require('../helpers/common_helper');
+const {Offset, CustomEventTarget} = require('../helpers/common_helper');
 const { sha256, PRF } = require('../helpers/crypto_helper');
 const fs = require('fs');
 
@@ -26,7 +26,7 @@ function initializeDTLS(certificatePath, keyPath){
     calculateAndSetSelfCertificateFingerprint();
 }
 
-class DTLSContext{
+class DTLSContext extends CustomEventTarget{
 
     strippedCertBuffer = null
     cert = null
@@ -49,10 +49,8 @@ class DTLSContext{
 
     srtpProfile = 0x0001;
 
-    onDTLSParamsReadyCB = null;
-
-    constructor({onDTLSParamsReady}){
-        this.onDTLSParamsReadyCB = onDTLSParamsReady;
+    constructor(){
+        super();
         this.setCertAndKey(certificateContents, keyContents);
     }
 
@@ -125,12 +123,12 @@ class DTLSContext{
 
                     this.writeToKeyLogFile(this.clientRandom, this.masterSecret);
 
-                    this.onDTLSParamsReadyCB({
+                    this.dispatchEvent('dtlsParamsReady', {
                         masterSecret: this.masterSecret, 
                         clientRandom: this.clientRandom, 
                         serverRandom: this.serverRandom, 
                         srtpProfile: this.srtpProfile
-                    });
+                    })
 
                     this.symmetricKeys = this.computeSymmetricKeysFromMasterSecret(this.masterSecret, this.clientRandom, this.serverRandom);
 

@@ -37,7 +37,7 @@ const PROFILE_PARAMS = {
  * Processing is taken care by the super (RTPContext) class.
  * Actual writing on the wire and actual listening from the wire are outside the scope of this class.
  */
-class SRTPContext extends RTPContext{
+class SRTPContext{
     keyDerivationRate = 0x00;
     srtpMasterKeyLength = 16; // bytes
     srtpMasterSaltLength = 14; // bytes
@@ -55,9 +55,7 @@ class SRTPContext extends RTPContext{
 
     srtcpIndexCount = {}
 
-    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes}){
-        super({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes});
-    }
+    constructor(){}
 
 
     initSRTP(tlsParams){
@@ -66,10 +64,10 @@ class SRTPContext extends RTPContext{
         //console.log('DTLS-SRTP Params:', this, this.tlsData);
 
         const index = 0;
-        const masterKeys = this.deriveSRTPMasterKeysFromDTLSData(index);
+        const masterKeys = this.#deriveSRTPMasterKeysFromDTLSData(index);
 
         if(masterKeys.srtpClientWriteMasterKey && masterKeys.srtpClientWriteMasterSalt){
-            this.srtpParams.clientKeys = this.deriveSRTPSessionKeys(masterKeys.srtpClientWriteMasterKey, masterKeys.srtpClientWriteMasterSalt, index);
+            this.srtpParams.clientKeys = this.#deriveSRTPSessionKeys(masterKeys.srtpClientWriteMasterKey, masterKeys.srtpClientWriteMasterSalt, index);
             // console.log(`
             //     client - srtpEncryptionKey  : ${this.srtpParams.clientKeys.srtpEncryptionKey.toString('hex')}
             //     client - srtpAuthKey        : ${this.srtpParams.clientKeys.srtpAuthenticationKey.toString('hex')}
@@ -81,7 +79,7 @@ class SRTPContext extends RTPContext{
         }
     
         if(masterKeys.srtpServerWriteMasterKey && masterKeys.srtpServerWriteMasterSalt){
-            this.srtpParams.serverKeys = this.deriveSRTPSessionKeys(masterKeys.srtpServerWriteMasterKey, masterKeys.srtpServerWriteMasterSalt, index);
+            this.srtpParams.serverKeys = this.#deriveSRTPSessionKeys(masterKeys.srtpServerWriteMasterKey, masterKeys.srtpServerWriteMasterSalt, index);
             // console.log(`
             //     server - srtpEncryptionKey  : ${this.srtpParams.serverKeys.srtpEncryptionKey.toString('hex')}
             //     server - srtpAuthKey        : ${this.srtpParams.serverKeys.srtpAuthenticationKey.toString('hex')}
@@ -95,7 +93,7 @@ class SRTPContext extends RTPContext{
     }
     
     // By spec, need to call this every `keyDerivationRate` packets
-    deriveSRTPMasterKeysFromDTLSData(index){
+    #deriveSRTPMasterKeysFromDTLSData(index){
     
         index = index || 0;
 
@@ -130,18 +128,18 @@ class SRTPContext extends RTPContext{
     
     }
     
-    deriveSRTPSessionKeys(masterKey, masterSalt, index){
+    #deriveSRTPSessionKeys(masterKey, masterSalt, index){
     
         const currentProfile = PROFILE_CONSTANTS[this.tlsData.srtpProfile];
         const currentProfileParams = PROFILE_PARAMS[currentProfile];
     
-        const srtpEncryptionKey = this.srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x00]), index, currentProfileParams.cipherKeyLengthBits / 8);
-        const srtpAuthenticationKey = this.srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x01]), index, currentProfileParams.authKeyLengthBits / 8);
-        const srtpSaltKey = this.srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x02]), index, currentProfileParams.cipherSaltLengthBits / 8);
+        const srtpEncryptionKey = this.#srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x00]), index, currentProfileParams.cipherKeyLengthBits / 8);
+        const srtpAuthenticationKey = this.#srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x01]), index, currentProfileParams.authKeyLengthBits / 8);
+        const srtpSaltKey = this.#srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x02]), index, currentProfileParams.cipherSaltLengthBits / 8);
     
-        const srtcpEncryptionKey = this.srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x03]), index, currentProfileParams.cipherKeyLengthBits / 8);
-        const srtcpAuthenticationKey = this.srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x04]), index, currentProfileParams.authKeyLengthBits / 8);
-        const srtcpSaltKey = this.srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x05]), index, currentProfileParams.cipherSaltLengthBits / 8);
+        const srtcpEncryptionKey = this.#srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x03]), index, currentProfileParams.cipherKeyLengthBits / 8);
+        const srtcpAuthenticationKey = this.#srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x04]), index, currentProfileParams.authKeyLengthBits / 8);
+        const srtcpSaltKey = this.#srtpKDFForLabel2(masterKey, masterSalt, Buffer.from([0x05]), index, currentProfileParams.cipherSaltLengthBits / 8);
     
         return {
             srtpEncryptionKey,
@@ -164,7 +162,7 @@ class SRTPContext extends RTPContext{
      * @param {number} length - The desired length of the output keying material.
      * @returns {Buffer} - The derived keying material of the specified length.
      */
-    srtpKDFForLabel2(masterKey, masterSalt, labelBuffer, index, length) {
+    #srtpKDFForLabel2(masterKey, masterSalt, labelBuffer, index, length) {
     
         if(!index){
             //console.log('No index given, setting it to zero');
@@ -200,35 +198,22 @@ class SRTPContext extends RTPContext{
         return encrypted.slice(0, length);
     
     }
-    
-    handleIncomingPacketFromRemote(packet){
 
-        const version = packet[0] >> 6;
-        if(version != 2){
-            console.error('Invalid version');
-            return;
-        }
-    
-        const byte2 = packet[1];
-        const payloadType = byte2 & 0b01111111;
-    
-    
-        
-        let decrypted;
-    
-        if(payloadType == 96){
-            decrypted = this.decryptSRTP(packet, this.srtpParams.clientKeys);
+    decryptPacket(packet, extensionsInfo){
 
-        }
-        else{
-            decrypted = this.decryptSRTCP(packet, this.srtpParams.clientKeys);      
-        }
-        super.handleIncomingPacketFromRemote(decrypted);
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1];
 
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            return this.decryptSRTP(packet, this.srtpParams.clientKeys, extensionsInfo);
+        }
+        else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
+            return this.decryptSRTCP(packet, this.srtpParams.clientKeys);
+        }
     }
 
     
-    decryptSRTP(packet, keys){
+    decryptSRTP(packet, keys, extensionsInfo){
     
         const sequenceNumber = packet.readUInt16BE(2);
     
@@ -237,13 +222,11 @@ class SRTPContext extends RTPContext{
         const ssrcBuffer = Buffer.alloc(4);
         ssrcBuffer.writeUIntBE(ssrc, 0, 4);
 
-        const extensionsInfo = super.handleHeaderExtensions(packet);
-
         const index = this.predictRTPIndex(ssrc, sequenceNumber);
         const indexBuffer = Buffer.alloc(6);
         indexBuffer.writeUIntBE(index, 0, 6);
     
-        const iv = this.getIV(keys.srtpSaltKey, ssrcBuffer, indexBuffer);
+        const iv = this.#getIV(keys.srtpSaltKey, ssrcBuffer, indexBuffer);
 
         const encryptedPayloadStart = 12 + extensionsInfo.extensionsBufferLength;
         const encryptedPayload = packet.slice(encryptedPayloadStart, packet.length - 10);
@@ -300,7 +283,7 @@ class SRTPContext extends RTPContext{
         srtcpIndexValueBuffer[0] = srtcpIndexValueBuffer[0] & 0b01111111;
 
         const ssrcBuffer = packet.slice(4, 8);
-        const iv = this.getIV(keys.srtcpSaltKey, ssrcBuffer, srtcpIndexValueBuffer);
+        const iv = this.#getIV(keys.srtcpSaltKey, ssrcBuffer, srtcpIndexValueBuffer);
 
         const encryptedPayload = packet.slice(encryptedPayloadStartIndex, srtcpIndexNoStartIndex);
         const authenticatedPortion = packet.slice(0, authTagStartIndex);
@@ -346,7 +329,7 @@ class SRTPContext extends RTPContext{
      * @param {Number} counter 
      * @returns ivBuffer
      */
-    getIV(saltingKeyBuffer, ssrcBuffer, packetIndexBuffer){
+    #getIV(saltingKeyBuffer, ssrcBuffer, packetIndexBuffer){
     
         const ivSegment = Buffer.alloc(16);
         const paddedSalt = Buffer.concat([saltingKeyBuffer, Buffer.alloc(16 / 8)]);
@@ -365,39 +348,19 @@ class SRTPContext extends RTPContext{
          
     }
 
-    handleOutgoingPacketToRemote(packet, sourceContext){
-
-        if(!Object.keys(this.srtpParams.serverKeys).length){
-            console.error('SRTP keys not set');
-            return;
-        }
-
-
-        let encryptedPacket;
-        let type;
+    encryptPacket(packet, extensionsInfo){
         const rtpPayloadType = packet[1] & 0b01111111;
         const rtcpPacketType = packet[1];
-        
-        if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
-            type = 'RTCP';
-            encryptedPacket = this.encryptRTCP(packet, this.srtpParams.serverKeys);
-        }
-        else if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-            packet = this.processRTPBeforeSending(packet, sourceContext);
-            const newPayloadType = packet[1] & 0b01111111;
-            if(this.knownRTPPayloadTypes[newPayloadType]){
-                type = 'RTP';  
-                encryptedPacket = this.encryptRTP(packet, this.srtpParams.serverKeys);
-            }
-            else{
-                console.error('Unknown payload type even after processing', newPayloadType, 'known types:', this.knownRTPPayloadTypes, packet);
-            }
-        }
 
-        this.sendPacketToRemoteCallback(encryptedPacket);
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            return this.encryptRTP(packet, this.srtpParams.serverKeys, extensionsInfo);
+        }
+        else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
+            return this.encryptRTCP(packet, this.srtpParams.serverKeys);
+        }
     }
 
-    encryptRTP(packet, keys){
+    encryptRTP(packet, keys, extensionsInfo){
         
             const sequenceNumber = packet.readUInt16BE(2);
         
@@ -409,8 +372,10 @@ class SRTPContext extends RTPContext{
             const indexBuffer = Buffer.alloc(6);
             indexBuffer.writeUIntBE(index, 0, 6);
         
-            const iv = this.getIV(keys.srtpSaltKey, ssrcBuffer, indexBuffer, 0);
-            const payload = packet.slice(12);
+            const iv = this.#getIV(keys.srtpSaltKey, ssrcBuffer, indexBuffer, 0);
+
+            const payloadStartPos = 12 + extensionsInfo.extensionsBufferLength;
+            const payload = packet.slice(payloadStartPos);
         
             const cipher = crypto.createCipheriv('aes-128-ctr', keys.srtpEncryptionKey, iv);
         
@@ -423,13 +388,13 @@ class SRTPContext extends RTPContext{
             const rocBuffer = Buffer.alloc(4);
             rocBuffer.writeUIntBE(roc, 0, 4);
         
-            const authenticatedPortionWithROC = Buffer.concat([packet.slice(0, 12), encryptedPayload, rocBuffer]);
+            const authenticatedPortionWithROC = Buffer.concat([packet.slice(0, payloadStartPos), encryptedPayload, rocBuffer]);
         
             const hmac = crypto.createHmac('sha1', keys.srtpAuthenticationKey);
             hmac.update(authenticatedPortionWithROC);
             const authTag = hmac.digest().slice(0, 10);
         
-            const encryptedPacket = Buffer.concat([packet.slice(0, 12), encryptedPayload, authTag]);
+            const encryptedPacket = Buffer.concat([packet.slice(0, payloadStartPos),  encryptedPayload, authTag]);
             return encryptedPacket;
     }
 
@@ -449,7 +414,7 @@ class SRTPContext extends RTPContext{
         const indexBuffer = Buffer.alloc(4);
         indexBuffer.writeUIntBE(index, 0, 4);
 
-        const iv = this.getIV(keys.srtcpSaltKey, ssrcBuffer, indexBuffer);
+        const iv = this.#getIV(keys.srtcpSaltKey, ssrcBuffer, indexBuffer);
 
         // since we are encrypting, we need to set the MSB of index to 1
         indexBuffer[0] = indexBuffer[0] | 0b10000000;

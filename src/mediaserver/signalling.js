@@ -42,15 +42,15 @@ function initializeSignalling(){
                     console.log('Sender is ready');
                     console.log('receivers are..', receivers);
             
-                    const rtpStream = sender.peer.subscribeToRTPStream(null);
-                    for (const receiver of receivers){
-                        receiver.peer.addRTPStream(rtpStream);
-                    }
+                    // const rtpStream = sender.peer.subscribeToRTPStream(null);
+                    // for (const receiver of receivers){
+                    //     receiver.peer.addRTPStream(rtpStream);
+                    // }
             
-                    for (const receiver of receivers){
-                        const eventStream = receiver.peer.subscribeToRTCPEventsStream(null);
-                        sender.peer.addRTCPEventsStream(eventStream);
-                    }
+                    // for (const receiver of receivers){
+                    //     const eventStream = receiver.peer.subscribeToRTCPEventsStream(null);
+                    //     sender.peer.addRTCPEventsStream(eventStream);
+                    // }
                 }
             }
         })

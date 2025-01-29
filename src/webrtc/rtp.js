@@ -1,11 +1,11 @@
 
-const {ntpToTimeMs, setUInt24} = require('../helpers/common_helper');
+const {ntpToTimeMs, setUInt24, CustomEventTarget} = require('../helpers/common_helper');
 
 /**
  * This class takes care of processing RTP packets.
  * Actual writing on the wire and actual listening from the wire are outside the scope of this class.
  */
-class RTPContext{
+class RTPContext extends CustomEventTarget{
 
     static #MAX_DROPOUT = 3000;
     static #MAX_MISORDER = 100;
@@ -13,45 +13,19 @@ class RTPContext{
     static #RTP_SEQ_MOD = 1 << 16 
 
     #ssrcStats = {};
-    knownRTPPayloadTypes = null;
 
     /**
      * 
      * @param {Object} Params
      * @param {Function} Params.onPacketReadyToSend - Callback that will be called when a packet needs to be sent to the remote peer.
-     * For every call of `handleOutgoingPacketToRemote`, the SRTPContext will call `onPacketReadyToSend` with the encrypted SRTP packet
+     * For every call of `handleOutgoingPacketToClient`, the SRTPContext will call `onPacketReadyToSend` with the encrypted SRTP packet
      * 
      * @param {Function} Params.onRTPPacketReadyForApplication - Callback that will be called when an RTP packet is ready to be used by the application
      * For every call of `handlePacketFromRemote`, the SRTPContext will call `onRTPPacketReadyForApplication` with the decrypted RTP packet
      * 
      */
-    constructor({onPacketReadyToSend, onRTPPacketReadyForApplication, payloadTypes, extensions}){
-        this.sendPacketToRemoteCallback = onPacketReadyToSend;
-        this.rtpPacketReadyForApplicationCallback = onRTPPacketReadyForApplication;
-        this.knownRTPPayloadTypes = payloadTypes;
-        this.extensions = extensions;
-        console.log('RTP init | Known RTP Payload types:', this.knownRTPPayloadTypes);
-    }
-    
-    handleIncomingPacketFromRemote(packet, remote){
-
-        const version = packet[0] >> 6;
-        if(version != 2){
-            console.error('Invalid version');
-            return;
-        }
-
-        const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
-    
-    
-        //console.log(`${currentTime}: ${type} - Ver: ${version} | Padding: ${padding} | Ext: ${extension} | CSRCCount: ${csrcCount} | Mbit: ${marker} | PT: ${payloadType} | SeqNo: ${sequenceNumber} | time: ${timestamp} | SSRC: ${ssrc}`);
-    
-        if(this.knownRTPPayloadTypes[rtpPayloadType]){
-            this.#handleRTP(packet);
-        }
-        else{
-            this.handleRTCP(packet);
-        }
+    constructor(){
+        super();
     }
 
     #validateRTPHeader(rtpPacket){
@@ -60,11 +34,6 @@ class RTPContext{
 
         if(version != 2){
             console.error('Invalid version');
-            return false;
-        }
-
-        if(!this.knownRTPPayloadTypes[payloadType]){
-            console.error('Unknown payload type');
             return false;
         }
 
@@ -181,7 +150,7 @@ class RTPContext{
      * @param {*} rtpPacket 
      * @returns {HeaderExtensionsInfo} Information about the header extensions
      */
-    handleHeaderExtensions(rtpPacket){
+    static parseHeaderExtensions(rtpPacket){
         // parse header extensions
         const areExtensionsPresent = rtpPacket[0] & 0b00010000;
 
@@ -220,7 +189,7 @@ class RTPContext{
         }
     }
 
-    #handleRTP(rtpPacket){
+    handleRTPFromClient(rtpPacket){
 
         const ssrc = rtpPacket.readUInt32BE(8);
         const seqNo = rtpPacket.readUInt16BE(2);
@@ -249,20 +218,14 @@ class RTPContext{
         const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
         this.#updateJitter(ssrc, departureRTPTimestamp);
 
-        // parse headers
-        const extensionsInfo = super.handleHeaderExtensions(packet);
-        console.log('Extensions Info:', extensionsInfo);
-
-        
-
-        this.rtpPacketReadyForApplicationCallback(rtpPacket, this);
     }
 
-    handleRTCP(rtcpPacket){
+    handleFeedbackFromClient(rtcpPacket){
         const padding = (rtcpPacket[0] >> 5) & 0b1;
         const rrc = rtcpPacket[0] & 0b00011111;
         
         const packetType = rtcpPacket[1];
+        console.log('fb from client', packetType)
 
         if(packetType == 200){
             
@@ -291,23 +254,14 @@ class RTPContext{
                 octetCount,
             }
 
-            const receiverReport = this.generateReceiverReport(ssrc);
-            this.handleOutgoingPacketToRemote(receiverReport);
-            this.rtpPacketReadyForApplicationCallback(rtcpPacket, this);
+            const receiverReport = this.#generateReceiverReport(ssrc);
 
-        }
-        else if (packetType == 201){
-            const length = rtcpPacket.readUInt16BE(2);
-            const ssrc = rtcpPacket.readUInt32BE(4);
-            //console.log(`RR (pkt len: ${rtcpPacket.length}) Padding: ${padding} | RRC: ${rrc} | Length: ${length} | SSRC: ${ssrc}`);
+            this.dispatchEvent('send_fb_i_to_remote', receiverReport);
 
-        }
-        else{
-            this.rtpPacketReadyForApplicationCallback(rtcpPacket, this);
         }
     }
 
-    generateReceiverReport(ssrc){
+    #generateReceiverReport(ssrc){
 
         const ssrcBuffer = Buffer.alloc(4);
         ssrcBuffer.writeUInt32BE(ssrc, 0);
@@ -376,7 +330,7 @@ class RTPContext{
         const jitterAsBuffer = Buffer.alloc(4); // jitter represented as a buffer, not the jitter buffer used to rearrange packets
         jitterAsBuffer.writeUInt32BE(jitter, 0);
         
-        
+        console.log(`SSRC: ${ssrc} | Expected: ${expectedPackets} | Received: ${ssrcStats.packetsReceived} | Lost: ${lostPackets} | Fraction Lost: ${fractionLost} | Jitter: ${jitter} | Last SR: ${ssrcStats.lastSR.rtpTimestamp} | DLSR ms: ${dlsrMs}`);
 
         const temp = [
             // version : 2, padding : 0, report count: 1 
@@ -424,31 +378,24 @@ class RTPContext{
         return buffer;
     }
 
-    handleOutgoingPacketToRemote(packet, sourceContext){
-        const payloadType = packet[1] & 0b01111111;
-        if(this.knownRTPPayloadTypes[payloadType]){
-            packet = this.processRTPBeforeSending(packet, sourceContext);
-        }
+    handleOutgoingPacketToClient(packet, sourceContext){
+        
 
-        this.sendPacketToRemoteCallback(packet);
+        //this.dispatchEvent('send_rtp_o_to_remote', packet);
     }
 
-    processRTPBeforeSending(rtpPacket, sourceContext){
+    handleRTPToRemote(packet, sourceContext){
+        
+        this.#processRTPBeforeSending(packet, sourceContext);
+        this.dispatchEvent('send_rtp_o_to_remote', packet);
+        
+    }
 
-        const payloadTypeInPacket = rtpPacket[1] & 0b01111111;
-        const codec = sourceContext.knownRTPPayloadTypes[payloadTypeInPacket];
+    handleFeedbackToRemote(packet){
+        this.dispatchEvent('send_fb_i_to_remote', packet);
+    }
 
-        const expectedPayloadType = Object.keys(this.knownRTPPayloadTypes).find(key => this.knownRTPPayloadTypes[key] == codec);
-
-        if(payloadTypeInPacket != expectedPayloadType){
-
-            // clone packet
-            rtpPacket = Buffer.from(rtpPacket);
-
-            let temp = rtpPacket[1] & 0b10000000;
-            temp |= expectedPayloadType;
-            rtpPacket[1] = temp;
-        }
+    #processRTPBeforeSending(rtpPacket, sourceContext){
 
         const ssrc = rtpPacket.readUInt32BE(8);
         if(!this.#ssrcStats[ssrc]){
