@@ -210,6 +210,10 @@ class SRTPContext{
         else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
             return this.decryptSRTCP(packet, this.srtpParams.clientKeys);
         }
+        else{
+            console.error('Unknown packet type', 'rtcpPacketType:', rtcpPacketType, 'rtpPayloadType:', rtpPayloadType, packet);
+            //return packet;
+        }
     }
 
     
@@ -227,8 +231,9 @@ class SRTPContext{
         indexBuffer.writeUIntBE(index, 0, 6);
     
         const iv = this.#getIV(keys.srtpSaltKey, ssrcBuffer, indexBuffer);
-
         const encryptedPayloadStart = 12 + extensionsInfo.extensionsBufferLength;
+
+        const extensionsBuffer = packet.slice(12, encryptedPayloadStart);
         const encryptedPayload = packet.slice(encryptedPayloadStart, packet.length - 10);
         const authTag = packet.slice(packet.length - 10);
     
@@ -262,7 +267,7 @@ class SRTPContext{
         //console.log('encryptedPayload:', encryptedPayload.toString('hex'));
         //console.log('decryptedPayload:', decryptedPayload);
     
-        return Buffer.concat([packet.slice(0, 12), decryptedPayload]);
+        return Buffer.concat([packet.slice(0, 12), extensionsBuffer, decryptedPayload]);
         
         
     }

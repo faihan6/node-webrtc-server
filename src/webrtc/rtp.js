@@ -154,6 +154,8 @@ class RTPContext extends CustomEventTarget{
         // parse header extensions
         const areExtensionsPresent = rtpPacket[0] & 0b00010000;
 
+        const extensions = []
+
         /**
          * includes the 0xBEDE header, the extensions and the padding
          */
@@ -162,30 +164,45 @@ class RTPContext extends CustomEventTarget{
         if(areExtensionsPresent){
             const isOneByteHeaderMode = rtpPacket.readUInt16BE(12) == 0xBEDE;
             const extensionLength = rtpPacket.readUInt16BE(14);
+            console.log('Extension Length:', extensionLength);
 
-            let start = 16;
-            for(let i = 0; i < extensionLength; i++){
-                const extId = (rtpPacket[start] & 0b11110000) >> 4;
-                const extLength = (rtpPacket[start] & 0b00001111) + 1;
-                const extValue = rtpPacket.slice(start + 1, start + 1 + extLength);
-                console.log(rtpPacket[start], 'Extension:', extId, extLength, extValue);
-
-                start += 1 + extLength;
+            if(extensionLength > 20){
+                console.error('Extension length too long', extensionLength, rtpPacket);
             }
-            
-            // padding
-            const padding = 4 - (start % 4);
 
-            extensionsBufferLength = (start + padding) - 12;
+            else{
+                console.log('Extensions present', rtpPacket);
+                let start = 16;
+                for(let i = 0; i < extensionLength; i++){
+                    const extId = (rtpPacket[start] & 0b11110000) >> 4;
+                    const extLength = (rtpPacket[start] & 0b00001111) + 1;
+                    const extValue = rtpPacket.slice(start + 1, start + 1 + extLength);
+                    console.log(start, rtpPacket[start], 'Extension:', extId, extLength, extValue);
 
-            console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
+                    start += 1 + extLength;
+
+                    extensions.push({
+                        id: extId,
+                        length: extLength,
+                        value: extValue
+                    })
+                }
+                
+                // padding
+                const padding = 4 - (start % 4);
+
+                extensionsBufferLength = (start + padding) - 12;
+
+                console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
+            }
             
         }
 
         
         return {
             areExtensionsPresent,
-            extensionsBufferLength
+            extensionsBufferLength,
+            extensions
         }
     }
 
@@ -225,7 +242,7 @@ class RTPContext extends CustomEventTarget{
         const rrc = rtcpPacket[0] & 0b00011111;
         
         const packetType = rtcpPacket[1];
-        console.log('fb from client', packetType)
+        //console.log('fb from client', packetType)
 
         if(packetType == 200){
             
@@ -256,7 +273,7 @@ class RTPContext extends CustomEventTarget{
 
             const receiverReport = this.#generateReceiverReport(ssrc);
 
-            this.dispatchEvent('send_fb_i_to_remote', receiverReport);
+            this.dispatchEvent('send_fb_i_to_client', receiverReport);
 
         }
     }
@@ -330,7 +347,7 @@ class RTPContext extends CustomEventTarget{
         const jitterAsBuffer = Buffer.alloc(4); // jitter represented as a buffer, not the jitter buffer used to rearrange packets
         jitterAsBuffer.writeUInt32BE(jitter, 0);
         
-        console.log(`SSRC: ${ssrc} | Expected: ${expectedPackets} | Received: ${ssrcStats.packetsReceived} | Lost: ${lostPackets} | Fraction Lost: ${fractionLost} | Jitter: ${jitter} | Last SR: ${ssrcStats.lastSR.rtpTimestamp} | DLSR ms: ${dlsrMs}`);
+        //console.log(`SSRC: ${ssrc} | Expected: ${expectedPackets} | Received: ${ssrcStats.packetsReceived} | Lost: ${lostPackets} | Fraction Lost: ${fractionLost} | Jitter: ${jitter} | Last SR: ${ssrcStats.lastSR.rtpTimestamp} | DLSR ms: ${dlsrMs}`);
 
         const temp = [
             // version : 2, padding : 0, report count: 1 
@@ -381,18 +398,18 @@ class RTPContext extends CustomEventTarget{
     handleOutgoingPacketToClient(packet, sourceContext){
         
 
-        //this.dispatchEvent('send_rtp_o_to_remote', packet);
+        //this.dispatchEvent('send_rtp_o_to_client', packet);
     }
 
-    handleRTPToRemote(packet, sourceContext){
+    handleRTPToClient(packet, sourceContext){
         
         this.#processRTPBeforeSending(packet, sourceContext);
-        this.dispatchEvent('send_rtp_o_to_remote', packet);
+        this.dispatchEvent('send_rtp_o_to_client', packet);
         
     }
 
-    handleFeedbackToRemote(packet){
-        this.dispatchEvent('send_fb_i_to_remote', packet);
+    handleFeedbackToClient(packet){
+        this.dispatchEvent('send_fb_i_to_client', packet);
     }
 
     #processRTPBeforeSending(rtpPacket, sourceContext){
@@ -411,8 +428,6 @@ class RTPContext extends CustomEventTarget{
         // TODO: payload may not always start at 12th byte. Check if this is fine.
         this.#ssrcStats[ssrc].payloadBytesSent += rtpPacket.length - 12;
         //console.log('SSRC:', ssrc, 'Packets Sent:', this.#ssrcStats[ssrc].packetsSent, 'Payload Bytes Sent:', this.#ssrcStats[ssrc].payloadBytesSent);
-
-        return rtpPacket
     }
 
 }

@@ -3,12 +3,12 @@ const { PeerContext } = require('../webrtc/peer_context');
 class UserContext{
 
     ws = null;
-    peer = new PeerContext();
 
     constructor(data){
 
         this.userId = Math.random().toString(36).substring(7);
         this.ws = data.ws;
+        this.peer = new PeerContext({id: this.userId});
 
         console.log(`New client connected : user ${this.userId}`);
 

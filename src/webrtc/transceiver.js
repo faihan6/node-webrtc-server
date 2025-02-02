@@ -1,4 +1,5 @@
 const { CustomEventTarget } = require("../helpers/common_helper");
+const { RTPStream } = require("./rtp_stream");
 
 /**
  * @class Transceiver
@@ -41,42 +42,71 @@ const { CustomEventTarget } = require("../helpers/common_helper");
 */
 class Transceiver extends CustomEventTarget{
 
-    constructor({mid, direction, mediaType, extensions, payloadTypes}){
+    #sendToClient = null;
+
+    constructor({mid, direction, mediaType, extensions, payloadTypes, sendToClient}){
         super();
         this.mid = mid;
         this.direction = direction;
         this.mediaType = mediaType;
         this.extensions = extensions;
+        this.payloadTypes = payloadTypes;
+        this.#sendToClient = sendToClient;
 
-    }
+        /**
+         * @type {RTPStream | null}
+         */
+        this.senderStream = null;
 
-    handlePacketFromClient(packet){
-        const payloadType = packet.readUInt8(1) & 0b01111111;
+        /**
+         * @type {RTPStream | null}
+         */
+        this.receiverStream = null;
 
-        if(payloadType >= 96 && payloadType <= 127){
-            this.dispatchEvent('rtp_for_consumer', packet);
+        console.log('Transceiver created with mid', mid, 'direction', direction, 'mediaType', mediaType);
+        if(direction == 'sendrecv' || direction == 'recvonly'){
+            this.receiverStream = new RTPStream(this.#sendToClient);
         }
-        else if(payloadType >= 200 && payloadType <= 206){
-            this.dispatchEvent('feedback_for_producer', packet);
+
+    }
+
+    setSenderStream(stream){
+        if(this.direction == 'sendrecv' || this.direction == 'sendonly'){
+            this.senderStream = stream;
+
+            this.senderStream.addEventListener('data', (packet, packetInfo) => {
+
+                // TODO: change the mid of the packet to the mid of this transceiver
+                //console.log('before fixing pt', packet);
+                packet = this.#fixPayloadType(packet, packetInfo);
+                //console.log('after fixing pt', packet);
+
+                this.dispatchEvent('rtp_for_client', packet);
+                
+                
+            })
+        }
+        else{
+            throw new Error('Cannot set sender stream for a recvonly transceiver');
         }
     }
 
-    handleFeedbackForClient(packet){
-        this.dispatchEvent('feedback_for_client', packet);
+    writeRTPToConsumer(packet){
+        const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
+        const packetInfo = {
+            codec: this.payloadTypes[rtpPayloadType]
+        }
+        this.receiverStream.controller.write(packet, packetInfo);
     }
 
-    handleRTPForClient(packet){
-        // change the mid of the packet to the mid of this transceiver
-
-        //this.#fixPayloadType(packet, {codec: 'Video/VP8'});
-
-        this.dispatchEvent('rtp_for_client', packet);
+    writeFeedbackToProducer(packet){
+        this.senderStream.feedback(packet);
     }
 
     #fixPayloadType(rtpPacket, packetInfo){
         const payloadTypeInPacket = rtpPacket[1] & 0b01111111;
         const codec = packetInfo.codec;
-        const expectedPayloadType = Object.keys(this.knownRTPPayloadTypes).find(key => this.knownRTPPayloadTypes[key] == codec);
+        const expectedPayloadType = Object.keys(this.payloadTypes).find(key => this.payloadTypes[key] == codec);
 
         if(payloadTypeInPacket != expectedPayloadType){
 

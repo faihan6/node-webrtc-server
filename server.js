@@ -1,24 +1,23 @@
+
+// load configs first
+const fs = require('fs');
+
+const toml = require('toml');
+const configFile = fs.readFileSync('server-config.toml');
+const config = toml.parse(configFile);
+globalThis.serverConfig = config;
+console.log('Config is..', config);
+
+
+// load modules
 const { initializeSignalling } = require("./src/mediaserver/signalling");
 const { initializeDTLS } = require("./src/webrtc/dtls");
 const { pid } = require('process');
 const { monitorEventLoopDelay } = require('perf_hooks');
 
-const fs = require('fs');
-const toml = require('toml');
-
-const configFile = fs.readFileSync('server-config.toml');
-const config = toml.parse(configFile);
-
-function initializeConfig(config){
-    console.log('Config is..', config);
-    Object.keys(config).forEach(key => {
-        globalThis[key] = config[key];
-    })
-}
 
 console.log('Process running on PID', pid)
 
-initializeConfig(config);
 initializeDTLS(config.certificatePath, config.keyPath);
 initializeSignalling()
 

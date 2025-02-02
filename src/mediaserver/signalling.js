@@ -41,16 +41,21 @@ function initializeSignalling(){
 
                     console.log('Sender is ready');
                     console.log('receivers are..', receivers);
+
+                    await new Promise(res => sender.peer.addEventListener('signalling_stable', res));
             
-                    // const rtpStream = sender.peer.subscribeToRTPStream(null);
-                    // for (const receiver of receivers){
-                    //     receiver.peer.addRTPStream(rtpStream);
-                    // }
-            
-                    // for (const receiver of receivers){
-                    //     const eventStream = receiver.peer.subscribeToRTCPEventsStream(null);
-                    //     sender.peer.addRTCPEventsStream(eventStream);
-                    // }
+                    
+                    for(const receiver of receivers){
+                        
+                        const mids = [0, 1];
+                        
+                        for(const mid of mids){
+                            console.log(receiver.userId, 'Subscribing to mid', mid);
+                            const stream = sender.peer.transceivers[mid].receiverStream
+                            receiver.peer.transceivers[mid].setSenderStream(stream);
+                        }
+                        
+                    }
                 }
             }
         })
