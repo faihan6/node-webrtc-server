@@ -136,6 +136,7 @@ class PeerContext extends CustomEventTarget{
         else{
             if(globalThis.serverConfig.disableWebRTCEncryption){
                 console.log(this.#peerId, 'No fingerprint in the offer. Remote Peer wants no encryption')
+                this.#isUsingEncryption = false;
             }
             else{
                 throw new Error('Fingerprint not found in offer. Rejecting');
@@ -252,6 +253,9 @@ class PeerContext extends CustomEventTarget{
                 if(line.startsWith('a=extmap') && supportedHeaderExtensions.some(supportedExtension => line.includes(supportedExtension))){
                     return true;
                 }
+                if(line.startsWith('a=sendrecv') || line.startsWith('a=recvonly') || line.startsWith('a=sendonly') || line.startsWith('a=inactive')){
+                    return true;
+                }
                 return false;
             }).join('\r\n');
 
@@ -335,20 +339,20 @@ class PeerContext extends CustomEventTarget{
         const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
         const rtcpPacketType = packet.readUInt8(1);
 
-        // let ssrc;
+        let ssrc;
 
-        // if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-        //     ssrc = packet.readUInt32BE(8);
-        // }
-        // else if(rtcpPacketType == 206){
-        //     ssrc = packet.readUInt32BE(8);
-        // }
-        // else{
-        //     ssrc = packet.readUInt32BE(4);
-        // }
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            ssrc = packet.readUInt32BE(8);
+        }
+        else if(rtcpPacketType == 206){
+            ssrc = packet.readUInt32BE(8);
+        }
+        else{
+            ssrc = packet.readUInt32BE(4);
+        }
 
 
-        const ssrc = packet.readUInt32BE(8);
+        //const ssrc = packet.readUInt32BE(8);
 
         let mid;
         let source;
@@ -367,7 +371,7 @@ class PeerContext extends CustomEventTarget{
         }
 
         if(mid == null || mid == undefined){
-            console.log(this.#peerId, 'mid not found for ssrc', ssrc);
+            console.log(this.#peerId, 'mid not found for ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPayloadType', rtcpPacketType, packet.slice(0,35));
             return;
         }
 

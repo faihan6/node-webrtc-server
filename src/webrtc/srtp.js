@@ -363,6 +363,9 @@ class SRTPContext{
         else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
             return this.encryptRTCP(packet, this.srtpParams.serverKeys);
         }
+        else{
+            console.error('what is this, how to encryt it?', 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType, packet.slice(0, 35))
+        }
     }
 
     encryptRTP(packet, keys, extensionsInfo){

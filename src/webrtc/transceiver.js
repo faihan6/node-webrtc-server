@@ -76,10 +76,17 @@ class Transceiver extends CustomEventTarget{
 
             this.senderStream.addEventListener('data', (packet, packetInfo) => {
 
-                // TODO: change the mid of the packet to the mid of this transceiver
-                //console.log('before fixing pt', packet);
-                packet = this.#fixPayloadType(packet, packetInfo);
-                //console.log('after fixing pt', packet);
+                // Note: you might get RTP packets or RTCP SR packets (from the source of RTP).
+
+                // TODO: change the mid of the packet to the mid of this transceiver only for RTP
+
+                const rtpPayloadType = packet[1] & 0b01111111;
+
+                if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+                    //console.log('before fixing pt', packet);
+                    packet = this.#fixPayloadType(packet, packetInfo);
+                    //console.log('after fixing pt', packet);
+                }
 
                 this.dispatchEvent('rtp_for_client', packet);
                 
