@@ -94,7 +94,9 @@ class RTPContext extends CustomEventTarget{
             if(currentSeqNo < ssrcStats.maxSeqNo){
                 ssrcStats.cycles += RTPContext.#RTP_SEQ_MOD;
             }
-            ssrcStats.maxSeqNo = currentSeqNo;
+            if(currentSeqNo > ssrcStats.maxSeqNo){
+                ssrcStats.maxSeqNo = currentSeqNo;
+            }
         }
         else if(seqNoDelta <= RTPContext.#RTP_SEQ_MOD - RTPContext.#MAX_MISORDER){
             if(currentSeqNo == ssrcStats.lastBadSeqNo){
@@ -164,20 +166,20 @@ class RTPContext extends CustomEventTarget{
         if(areExtensionsPresent){
             const isOneByteHeaderMode = rtpPacket.readUInt16BE(12) == 0xBEDE;
             const extensionLength = rtpPacket.readUInt16BE(14);
-            console.log('Extension Length:', extensionLength);
+            // console.log('Extension Length:', extensionLength);
 
             if(extensionLength > 20){
                 console.error('Extension length too long', extensionLength, rtpPacket);
             }
 
             else{
-                console.log('Extensions present', rtpPacket);
+                //console.log('Extensions present', rtpPacket);
                 let start = 16;
                 for(let i = 0; i < extensionLength; i++){
                     const extId = (rtpPacket[start] & 0b11110000) >> 4;
                     const extLength = (rtpPacket[start] & 0b00001111) + 1;
                     const extValue = rtpPacket.slice(start + 1, start + 1 + extLength);
-                    console.log(start, rtpPacket[start], 'Extension:', extId, extLength, extValue);
+                    //console.log(start, rtpPacket[start], 'Extension:', extId, extLength, extValue);
 
                     start += 1 + extLength;
 
@@ -193,7 +195,7 @@ class RTPContext extends CustomEventTarget{
 
                 extensionsBufferLength = (start + padding) - 12;
 
-                console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
+                //console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
             }
             
         }
@@ -211,11 +213,15 @@ class RTPContext extends CustomEventTarget{
         const ssrc = rtpPacket.readUInt32BE(8);
         const seqNo = rtpPacket.readUInt16BE(2);
 
+        console.log(performance.now(), 'received: ssrc', ssrc, 'SeqNo:', seqNo);
+
+        // lastKnownSeqNo must be stored here before it gets replaced in initSequenceNo/updateSequenceNo
+        const lastKnownSeqNo = this.#ssrcStats[ssrc] ? this.#ssrcStats[ssrc].maxSeqNo : null;
+
         // handle sequence number
         if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
             console.log('First packet for SSRC:', ssrc);
             this.#initSequenceNo(ssrc, seqNo);
-            //this.#ssrcStats[ssrc].maxSeqNo = seqNo - 1;
             this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
 
             this.#ssrcStats[ssrc].clockRate = 90000;
@@ -224,6 +230,7 @@ class RTPContext extends CustomEventTarget{
             this.#updateSequenceNo(ssrc, seqNo);
         }
         
+        const ssrcStats = this.#ssrcStats[ssrc];
 
         // validate RTP header
         if(!this.#validateRTPHeader(rtpPacket)){
@@ -235,6 +242,112 @@ class RTPContext extends CustomEventTarget{
         const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
         this.#updateJitter(ssrc, departureRTPTimestamp);
 
+        // TODO: check for missing packets and trigger NACKs accordingly.
+
+        if(!ssrcStats.nackSentCount){
+            ssrcStats.nackSentCount = {}
+        }
+        
+        //console.log(performance.now(), 'ssrc', ssrc, 'SeqNo:', seqNo, 'Last Known SeqNo:', lastKnownSeqNo);
+        if(lastKnownSeqNo){
+            const seqNoDelta = seqNo - lastKnownSeqNo;
+            if(seqNoDelta > 1){
+                this.#handleMissingPacket(ssrc, seqNo, lastKnownSeqNo);
+            }
+            if(this.#ssrcStats[ssrc].nackSentCount[seqNo]){
+                console.log('ssrc', ssrc, 'Received missing packet:', seqNo);
+                delete ssrcStats.nackSentCount[seqNo]
+            }
+        }
+
+    }
+
+    #handleMissingPacket(ssrc, seqNo, lastKnownSeqNo){
+        const ssrcStats = this.#ssrcStats[ssrc];
+        for(let i = lastKnownSeqNo + 1; i < seqNo; i++){
+            console.log(performance.now(), 'ssrc', ssrc, 'Missing packet:', i, 'Last known:', lastKnownSeqNo, 'Current:', seqNo);
+            ssrcStats.nackSentCount[i] = 1;
+
+            if(!ssrcStats.nackTimer){
+                ssrcStats.nackTimer = setTimeout(() => {
+                    // send NACK..
+                    const seqNosToSendNack = []
+
+                    for(const missingSeqNo in ssrcStats.nackSentCount){
+                        if(ssrcStats.nackSentCount[missingSeqNo] <= 3){
+                            seqNosToSendNack.push(missingSeqNo);
+                        }
+                        else{
+                            console.log(performance.now(), 'ssrc', ssrc, 'Giving up on missing packet:', missingSeqNo);
+                            delete ssrcStats.nackSentCount[missingSeqNo];
+                        }
+                    }
+
+                    if(seqNosToSendNack.length > 0){
+                        const nackBuffer = this.#generateNack(ssrc, seqNosToSendNack);
+                        if(nackBuffer){
+                            this.dispatchEvent('send_fb_i_to_client', nackBuffer)
+                        }
+
+                    }
+                    
+                    for(const missingSeqNo in ssrcStats.nackSentCount){
+                        ssrcStats.nackSentCount[missingSeqNo] += 1;
+                    }
+
+                    ssrcStats.nackTimer = null;
+                }, 150);
+            }
+            
+        }
+    }
+
+    /**
+     * 
+     * @param {Array} sequenceNumbers - Array of sequence numbers that are missing. Must be in ascending order.
+     */
+    #generateNack(ssrc, sequenceNumbers){
+
+        if(sequenceNumbers[sequenceNumbers.length - 1] - sequenceNumbers[0] < 16){
+            const buffer = Buffer.alloc(16);
+
+            buffer[0] = 2 << 6 | 0 << 5 | 1;
+            buffer[1] = 205;
+
+            const length = (buffer.length / 4) - 1;
+            buffer.writeUInt16BE(length, 2);
+
+            // sender ssrc
+            buffer.writeUInt32BE(1, 4);
+
+            // media source ssrc
+            buffer.writeUInt32BE(ssrc, 8);
+
+            // PID
+            buffer.writeUInt16BE(sequenceNumbers[0], 12);
+
+            const blp = Buffer.alloc(2);
+            for(let i = 1; i < sequenceNumbers.length; i++){
+
+                const seqNo = sequenceNumbers[i];
+                const offset = (seqNo - sequenceNumbers[0]);
+                if(offset <= 0 || offset > 16){
+                    console.error('Invalid offset', offset);
+                }
+                blp.writeUInt16BE(blp.readUInt16BE(0) | (1 << (offset - 1)), 0);
+                
+            }
+
+            buffer.writeUInt16BE(blp.readUInt16BE(0), 14);
+            console.log(performance.now(), 'ssrc', ssrc, 'Sending NACK for:', sequenceNumbers, sequenceNumbers[0], blp.readUInt8(0).toString(2).padStart(8, '0'), blp.readUInt8(1).toString(2).padStart(8, '0'));
+
+            return buffer
+        }
+        else{
+            // multiple NACKs required
+            console.log('Multiple NACKs required');
+        }
+        
     }
 
     handleFeedbackFromClient(rtcpPacket){

@@ -308,6 +308,11 @@ class PeerContext extends CustomEventTarget{
             this.iceContext.sendPacket(response, remote);
         }
         else if(packet.at(0) >> 6 == 0x02){
+
+            // drop randomly 5%
+            if(Math.random() < 0.1){
+                return;
+            }
             
             const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
             const rtcpPacketType = packet.readUInt8(1);
