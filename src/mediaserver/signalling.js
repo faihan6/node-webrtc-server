@@ -51,7 +51,7 @@ function initializeSignalling(){
                         
                         for(const mid of mids){
                             console.log(receiver.userId, 'Subscribing to mid', mid);
-                            const stream = sender.peer.transceivers[mid].receiverStream
+                            const stream = sender.peer.transceivers[mid].getReceiverStream();
                             receiver.peer.transceivers[mid].setSenderStream(stream);
                         }
                         

@@ -24,16 +24,15 @@ class PeerContext extends CustomEventTarget{
     idOfMIDExtension = null;
 
     /**
-     * We support only BUNDLEing, so there is only one ice context per peer
+     * Ideally, one ICEContext, DTLSContext and SRTPContext per BUNDLE group.
      */
-    iceContext = new ICEContext({onPacketReceived: this.allocatePacketToAppropriateMethod.bind(this)});
-
-    rtpStreamSubscriberCallbacks = {};
-
+    iceContext = new ICEContext({onPacketReceived: this.#allocatePacketToAppropriateMethod.bind(this)});
     #dtlsContext = new DTLSContext();
     #srtpContext = new SRTPContext();
 
-    #rtpContext = new RTPContext()
+    #rtpContext = new RTPContext();
+
+    rtpStreamSubscriberCallbacks = {};
 
 
     transceivers = {};
@@ -41,30 +40,8 @@ class PeerContext extends CustomEventTarget{
     #isUsingEncryption = true;
 
     constructor({id}){
-
         super();
-
         this.#peerId = id;
-
-        this.#dtlsContext.addEventListener('dtlsParamsReady', params => {
-            this.#srtpContext.initSRTP(params);
-        });
-
-        this.#rtpContext.addEventListener('send_rtp_o_to_client', packet => {
-            const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
-            if(this.#isUsingEncryption){
-                packet = this.#srtpContext.encryptPacket(packet, extensionsInfo)
-            }
-            this.iceContext.sendPacket(packet);
-        })
-
-        this.#rtpContext.addEventListener('send_fb_i_to_client', packet => {
-            if(this.#isUsingEncryption){
-            packet = this.#srtpContext.encryptPacket(packet)
-            }
-            //console.log(this.#peerId, 'send_fb_i_to_client event arrived', encryptedPacket.slice(15))
-            this.iceContext.sendPacket(packet);
-        })
     }
 
     async generateAnswer(offer) {
@@ -177,7 +154,7 @@ class PeerContext extends CustomEventTarget{
             /*
                 Read this!
                 
-                We do not use SSRCs primarily for demuxing. 
+                We do not use SSRCs 'primarily' for demuxing. 
                 
                 We use MIDs specified in packets (header extensions) to demux RTP packets from single ICE transport, 
                 and send them to appropriate transceivers.
@@ -216,9 +193,17 @@ class PeerContext extends CustomEventTarget{
 
             console.log(this.#peerId, `mid: ${mid}, mediaType: ${mediaType}, remoteDirection: ${remoteDirection}, selfDirection: ${selfDirection}, payloadTypes:`, payloadTypes, 'extensions:', extensions);
 
-            const tx = new Transceiver({mid, mediaType, direction: selfDirection, payloadTypes, extensions});
+            const tx = new Transceiver({
+                mid, mediaType, 
+                direction: selfDirection, 
+                payloadTypes, 
+                extensions,
+                iceContext: this.iceContext,
+                dtlsContext: this.#dtlsContext,
+                rtpContext: this.#rtpContext,
+                srtpContext: this.#srtpContext
+            });
             this.transceivers[mid] = tx;
-            this.#listenForTxEvents(tx);
 
             // 8. add m-blocks to answer
             // 8.1 replace remote direction with self direction
@@ -275,20 +260,20 @@ class PeerContext extends CustomEventTarget{
         return answer;
     }
 
-    #listenForTxEvents(tx){
-    
-        tx.addEventListener('rtp_for_client', packet => {
-            this.#rtpContext.handleRTPToClient(packet);
-        })
-    }
-
     #formatFingerprint(hash) {
         // Format the hash as specified
         const formattedFingerprint = hash.match(/.{2}/g).join(':');
         return `a=fingerprint:sha-256 ${formattedFingerprint}`;
     }
 
-    allocatePacketToAppropriateMethod(packet, remote){
+
+    /*
+        Demuxing is done only at the Peer level because, multiple transceivers might share
+        the same iceConext/srtpContext. One transceiver cannot demux and delegate to other transceivers.
+        So, it makes sense to demux at the peer level.
+    */
+
+    #allocatePacketToAppropriateMethod(packet, remote){
         
         if(packet.at(0) == 0x16){
             // DTLS
@@ -296,57 +281,50 @@ class PeerContext extends CustomEventTarget{
             this.iceContext.sendPacket(response, remote);
         }
         else if(packet.at(0) >> 6 == 0x02){
-
-            // drop randomly 5%
-            if(Math.random() < 0.1){
-                return;
-            }
-            
-            const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
-            const rtcpPacketType = packet.readUInt8(1);
-
-            const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
-
-            if(this.#isUsingEncryption){
-                packet = this.#srtpContext.decryptPacket(packet, extensionsInfo);
-            }
-
-            if((rtpPayloadType >= 96 && rtpPayloadType <= 127)){
-                // RTP-i
-                this.#rtpContext.handleRTPFromClient(packet);
-            }
-            else{
-                // SR-i and FB-o
-                this.#rtpContext.handleFeedbackFromClient(packet);
-            }
-
-            this.#incomingRTPDemuxer(packet, extensionsInfo);
-
-
+            // RTP/RTCP
+            this.#incomingRTPDemuxer(packet);    
         }
     }
 
-    #incomingRTPDemuxer(packet, extensionsInfo){
-        // identify mid from packet
+    #incomingRTPDemuxer(packet){
 
-        const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
-        const rtcpPacketType = packet.readUInt8(1);
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1];
 
         let ssrc;
 
         if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
             ssrc = packet.readUInt32BE(8);
         }
-        else if(rtcpPacketType == 206){
-            ssrc = packet.readUInt32BE(8);
-        }
-        else{
+        else if(rtcpPacketType == 200){
             ssrc = packet.readUInt32BE(4);
         }
+        else{
+            ssrc = packet.readUInt32BE(8);
+        }
+        console.log(this.#peerId, 'ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType);
+        
+        const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
+        const {mid, source} = this.#identifyMIDOfPacket(packet, ssrc, extensionsInfo);
+        const tx = this.transceivers[mid];
+        if(tx){
+            if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+                // RTP-i
+                tx.handleRTPFromClient(packet);
+            }
+            else if(rtcpPacketType == 200){
+                // FB-i
+                tx.handleSenderReportFromClient(packet);
+            }
+            else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
+                // FB-o
+                tx.handleFeedbackForProducerFromClient(packet);
+            }
+        }
 
+    }
 
-        //const ssrc = packet.readUInt32BE(8);
-
+    #identifyMIDOfPacket(packet, ssrc, extensionsInfo){
         let mid;
         let source;
         if(extensionsInfo && extensionsInfo.areExtensionsPresent){
@@ -364,27 +342,10 @@ class PeerContext extends CustomEventTarget{
         }
 
         if(mid == null || mid == undefined){
-            console.log(this.#peerId, 'mid not found for ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPayloadType', rtcpPacketType, packet.slice(0,35));
-            return;
+            console.log(this.#peerId, 'mid not found for ssrc', ssrc, packet.slice(0,35));
         }
 
-        const tx = this.transceivers[mid];
-        
-        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-            // RTP-i
-            tx.writeRTPToConsumer(packet);
-        }
-        else if(rtcpPacketType == 200){
-            // FB-i
-            // nothing to do here 
-        }
-        else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
-            // FB-o
-            const mediaSourceSSRC = packet.readUInt32BE(8);
-            console.log(this.#peerId, rtcpPacketType, 'ssrc', ssrc, 'mid', mid, 'source', source, 'mediaSourceSSRC', mediaSourceSSRC);
-            tx.writeFeedbackToProducer(packet);
-        }
-
+        return {mid, source};
     }
 
 }

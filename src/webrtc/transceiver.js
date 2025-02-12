@@ -1,4 +1,5 @@
 const { CustomEventTarget } = require("../helpers/common_helper");
+const { RTPContext } = require("./rtp");
 const { RTPStream } = require("./rtp_stream");
 
 /**
@@ -42,72 +43,36 @@ const { RTPStream } = require("./rtp_stream");
 */
 class Transceiver extends CustomEventTarget{
 
-    #sendToClient = null;
+    #iceContext = null;
+    #dtlsContext = null;
 
-    constructor({mid, direction, mediaType, extensions, payloadTypes, sendToClient}){
+    #rtpContext = new RTPContext();;
+    #srtpContext = null;
+
+    #senderStream = null;
+    #receiverStream = null;
+
+    constructor({mid, direction, mediaType, extensions, payloadTypes, iceContext, dtlsContext, srtpContext}){
         super();
         this.mid = mid;
         this.direction = direction;
         this.mediaType = mediaType;
         this.extensions = extensions;
         this.payloadTypes = payloadTypes;
-        this.#sendToClient = sendToClient;
 
-        /**
-         * @type {RTPStream | null}
-         */
-        this.senderStream = null;
+        this.#iceContext = iceContext;
+        this.#dtlsContext = dtlsContext;
+        this.#srtpContext = srtpContext;
 
-        /**
-         * @type {RTPStream | null}
-         */
-        this.receiverStream = null;
+        this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? new RTPStream() : null;
+
+        this.#dtlsContext.addEventListener('dtlsParamsReady', params => {
+            this.#srtpContext.initSRTP(params);
+        });
+
+        this.#rtpContext.addEventListener('send_fb_i_to_client', packet => this.#sendPacketToClient(packet));
 
         console.log('Transceiver created with mid', mid, 'direction', direction, 'mediaType', mediaType);
-        if(direction == 'sendrecv' || direction == 'recvonly'){
-            this.receiverStream = new RTPStream(this.#sendToClient);
-        }
-
-    }
-
-    setSenderStream(stream){
-        if(this.direction == 'sendrecv' || this.direction == 'sendonly'){
-            this.senderStream = stream;
-
-            this.senderStream.addEventListener('data', (packet, packetInfo) => {
-
-                // Note: you might get RTP packets or RTCP SR packets (from the source of RTP).
-
-                // TODO: change the mid of the packet to the mid of this transceiver only for RTP
-
-                const rtpPayloadType = packet[1] & 0b01111111;
-
-                if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-                    //console.log('before fixing pt', packet);
-                    packet = this.#fixPayloadType(packet, packetInfo);
-                    //console.log('after fixing pt', packet);
-                }
-
-                this.dispatchEvent('rtp_for_client', packet);
-                
-                
-            })
-        }
-        else{
-            throw new Error('Cannot set sender stream for a recvonly transceiver');
-        }
-    }
-
-    writeRTPToConsumer(packet){
-        const rtpPayloadType = packet.readUInt8(1) & 0b01111111;
-        const packetInfo = {
-            codec: this.payloadTypes[rtpPayloadType]
-        }
-        this.receiverStream.controller.write(packet, packetInfo);
-    }
-
-    writeFeedbackToProducer(packet){
-        this.senderStream.feedback(packet);
     }
 
     #fixPayloadType(rtpPacket, packetInfo){
@@ -128,6 +93,83 @@ class Transceiver extends CustomEventTarget{
         return rtpPacket;
     }
 
+    #sendPacketToClient(packet){
+        // encrypt the packet if required
+        if(this.#srtpContext){
+            const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
+            packet = this.#srtpContext.encryptPacket(packet, extensionsInfo);
+        }
+        this.#iceContext.sendPacket(packet);
+    }
+
+    #processRTPFromProducer(packet, packetInfo){
+
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1];
+
+        // process RTP
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            packet = this.#fixPayloadType(packet, packetInfo);
+            packet = this.#rtpContext.processRTPToClient(packet);
+        }
+        else{
+            // Must be RTCP Sender Report
+            packet = this.#rtpContext.processFeedbackToClient(packet);
+        }
+
+        this.#sendPacketToClient(packet);
+        
+        
+        
+    }
+
+    setSenderStream(stream){
+        if(this.direction == 'sendrecv' || this.direction == 'sendonly'){
+            this.#senderStream = stream;
+            this.#senderStream.addEventListener('data', (packet, packetInfo) => this.#processRTPFromProducer(packet, packetInfo));
+        }
+        else{
+            throw new Error('Cannot set sender stream for a recvonly transceiver');
+        }
+    }
+
+    getReceiverStream(){
+        return this.#receiverStream;
+    }
+
+    handleRTPFromClient(packet){
+
+        const rtpPayloadType = packet[1] & 0b01111111;
+
+        if((rtpPayloadType >= 96 && rtpPayloadType <= 127)){
+            // RTP-i
+            if(this.#srtpContext){
+                const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
+                packet = this.#srtpContext.decryptPacket(packet, extensionsInfo);
+            }
+            this.#rtpContext.processRTPFromClient(packet);
+        }
+
+        const packetInfo = {
+            codec: this.payloadTypes[rtpPayloadType]
+        }
+        this.#receiverStream.controller.write(packet, packetInfo);
+    }
+
+    handleSenderReportFromClient(packet){
+        if(this.#srtpContext){
+            packet = this.#srtpContext.decryptPacket(packet);
+        }
+        this.#rtpContext.processFeedbackFromClient(packet);
+        this.#receiverStream.controller.write(packet);
+    }
+
+    handleFeedbackForProducerFromClient(packet){
+        if(this.#srtpContext){
+            packet = this.#srtpContext.decryptPacket(packet);
+        }
+        this.#senderStream.feedback(packet);
+    }
     
 }
 

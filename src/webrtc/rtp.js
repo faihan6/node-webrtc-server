@@ -13,17 +13,8 @@ class RTPContext extends CustomEventTarget{
     static #RTP_SEQ_MOD = 1 << 16 
 
     #ssrcStats = {};
+    #outgoingSSRCStats = {};
 
-    /**
-     * 
-     * @param {Object} Params
-     * @param {Function} Params.onPacketReadyToSend - Callback that will be called when a packet needs to be sent to the remote peer.
-     * For every call of `handleOutgoingPacketToClient`, the SRTPContext will call `onPacketReadyToSend` with the encrypted SRTP packet
-     * 
-     * @param {Function} Params.onRTPPacketReadyForApplication - Callback that will be called when an RTP packet is ready to be used by the application
-     * For every call of `handlePacketFromRemote`, the SRTPContext will call `onRTPPacketReadyForApplication` with the decrypted RTP packet
-     * 
-     */
     constructor(){
         super();
     }
@@ -141,127 +132,6 @@ class RTPContext extends CustomEventTarget{
         this.#ssrcStats[ssrc].lastDepartureRTPTimestamp = departureRTPTimestamp;
     }
 
-    /**
-     * 
-     * @typedef {Object} HeaderExtensionsInfo
-     * @property {Boolean} areExtensionsPresent - Boolean indicating if header extensions are present.
-     * @property {Number} extensionsBufferLength - Length of the buffer containing the header extensions. Includes the 0xBEDE header, the extensions and the padding
-     */
-    
-    /** 
-     * @param {*} rtpPacket 
-     * @returns {HeaderExtensionsInfo} Information about the header extensions
-     */
-    static parseHeaderExtensions(rtpPacket){
-        // parse header extensions
-        const areExtensionsPresent = rtpPacket[0] & 0b00010000;
-
-        const extensions = []
-
-        /**
-         * includes the 0xBEDE header, the extensions and the padding
-         */
-        let extensionsBufferLength = 0;
-
-        if(areExtensionsPresent){
-            const isOneByteHeaderMode = rtpPacket.readUInt16BE(12) == 0xBEDE;
-            const extensionLength = rtpPacket.readUInt16BE(14);
-            // console.log('Extension Length:', extensionLength);
-
-            if(extensionLength > 20){
-                console.error('Extension length too long', extensionLength, rtpPacket);
-            }
-
-            else{
-                //console.log('Extensions present', rtpPacket);
-                let start = 16;
-                for(let i = 0; i < extensionLength; i++){
-                    const extId = (rtpPacket[start] & 0b11110000) >> 4;
-                    const extLength = (rtpPacket[start] & 0b00001111) + 1;
-                    const extValue = rtpPacket.slice(start + 1, start + 1 + extLength);
-                    //console.log(start, rtpPacket[start], 'Extension:', extId, extLength, extValue);
-
-                    start += 1 + extLength;
-
-                    extensions.push({
-                        id: extId,
-                        length: extLength,
-                        value: extValue
-                    })
-                }
-                
-                // padding
-                const padding = 4 - (start % 4);
-
-                extensionsBufferLength = (start + padding) - 12;
-
-                //console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
-            }
-            
-        }
-
-        
-        return {
-            areExtensionsPresent,
-            extensionsBufferLength,
-            extensions
-        }
-    }
-
-    handleRTPFromClient(rtpPacket){
-
-        const ssrc = rtpPacket.readUInt32BE(8);
-        const seqNo = rtpPacket.readUInt16BE(2);
-
-        console.log(performance.now(), 'received: ssrc', ssrc, 'SeqNo:', seqNo);
-
-        // lastKnownSeqNo must be stored here before it gets replaced in initSequenceNo/updateSequenceNo
-        const lastKnownSeqNo = this.#ssrcStats[ssrc] ? this.#ssrcStats[ssrc].maxSeqNo : null;
-
-        // handle sequence number
-        if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
-            console.log('First packet for SSRC:', ssrc);
-            this.#initSequenceNo(ssrc, seqNo);
-            this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
-
-            this.#ssrcStats[ssrc].clockRate = 90000;
-        }
-        else{
-            this.#updateSequenceNo(ssrc, seqNo);
-        }
-        
-        const ssrcStats = this.#ssrcStats[ssrc];
-
-        // validate RTP header
-        if(!this.#validateRTPHeader(rtpPacket)){
-            console.error('Invalid RTP header');
-            return;
-        }
-
-        // update inter-arrival jitter
-        const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
-        this.#updateJitter(ssrc, departureRTPTimestamp);
-
-        // TODO: check for missing packets and trigger NACKs accordingly.
-
-        if(!ssrcStats.nackSentCount){
-            ssrcStats.nackSentCount = {}
-        }
-        
-        //console.log(performance.now(), 'ssrc', ssrc, 'SeqNo:', seqNo, 'Last Known SeqNo:', lastKnownSeqNo);
-        if(lastKnownSeqNo){
-            const seqNoDelta = seqNo - lastKnownSeqNo;
-            if(seqNoDelta > 1){
-                this.#handleMissingPacket(ssrc, seqNo, lastKnownSeqNo);
-            }
-            if(this.#ssrcStats[ssrc].nackSentCount[seqNo]){
-                console.log('ssrc', ssrc, 'Received missing packet:', seqNo);
-                delete ssrcStats.nackSentCount[seqNo]
-            }
-        }
-
-    }
-
     #handleMissingPacket(ssrc, seqNo, lastKnownSeqNo){
         const ssrcStats = this.#ssrcStats[ssrc];
         for(let i = lastKnownSeqNo + 1; i < seqNo; i++){
@@ -348,47 +218,6 @@ class RTPContext extends CustomEventTarget{
             console.log('Multiple NACKs required');
         }
         
-    }
-
-    handleFeedbackFromClient(rtcpPacket){
-        const padding = (rtcpPacket[0] >> 5) & 0b1;
-        const rrc = rtcpPacket[0] & 0b00011111;
-        
-        const packetType = rtcpPacket[1];
-        //console.log('fb from client', packetType)
-
-        if(packetType == 200){
-            
-            const ssrc = rtcpPacket.readUInt32BE(4);
-
-            const length = rtcpPacket.readUInt16BE(2);
-            const ntpTimestampMSB = rtcpPacket.readUInt32BE(8);
-            const ntpTimestampLSB = rtcpPacket.readUInt32BE(12);
-
-            const rtpTimestamp = rtcpPacket.readUInt32BE(16);
-            const packetCount = rtcpPacket.readUInt32BE(20);
-            const octetCount = rtcpPacket.readUInt32BE(24);
-            //console.log(`NTP: ${(new Date(ntpToTimeMs(ntpTimestampMSB, ntpTimestampLSB))).toLocaleString()} | RTP TS: ${rtpTimestamp}`);
-
-            if(!this.#ssrcStats[ssrc]){
-                console.log('First RTCP packet for SSRC:', ssrc);
-                this.#ssrcStats[ssrc] = {}
-            }
-            
-            this.#ssrcStats[ssrc].lastSR = {
-                timestamp: performance.now(),
-                ntpTimestampMSB,
-                ntpTimestampLSB,
-                rtpTimestamp,
-                packetCount,
-                octetCount,
-            }
-
-            const receiverReport = this.#generateReceiverReport(ssrc);
-
-            this.dispatchEvent('send_fb_i_to_client', receiverReport);
-
-        }
     }
 
     #generateReceiverReport(ssrc){
@@ -508,39 +337,207 @@ class RTPContext extends CustomEventTarget{
         return buffer;
     }
 
-    handleOutgoingPacketToClient(packet, sourceContext){
-        
-
-        //this.dispatchEvent('send_rtp_o_to_client', packet);
-    }
-
-    handleRTPToClient(packet, sourceContext){
-        
-        this.#processRTPBeforeSending(packet, sourceContext);
-        this.dispatchEvent('send_rtp_o_to_client', packet);
-        
-    }
-
-    handleFeedbackToClient(packet){
-        this.dispatchEvent('send_fb_i_to_client', packet);
-    }
-
-    #processRTPBeforeSending(rtpPacket, sourceContext){
+    processRTPFromClient(rtpPacket){
 
         const ssrc = rtpPacket.readUInt32BE(8);
-        if(!this.#ssrcStats[ssrc]){
-            this.#ssrcStats[ssrc] = {
-                packetsSent: 0,
-                payloadBytesSent: 0,
-                baseWallclockTime: performance.now(),
-                baseRTPTimestamp: rtpPacket.readUInt32BE(4),
+        const seqNo = rtpPacket.readUInt16BE(2);
+
+        //console.log(performance.now(), 'received: ssrc', ssrc, 'SeqNo:', seqNo);
+
+        // lastKnownSeqNo must be stored here before it gets replaced in initSequenceNo/updateSequenceNo
+        const lastKnownSeqNo = this.#ssrcStats[ssrc] ? this.#ssrcStats[ssrc].maxSeqNo : null;
+
+        // handle sequence number
+        if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
+            console.log('First packet for SSRC:', ssrc);
+            this.#initSequenceNo(ssrc, seqNo);
+            this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
+
+            this.#ssrcStats[ssrc].clockRate = 90000;
+        }
+        else{
+            this.#updateSequenceNo(ssrc, seqNo);
+        }
+        
+        const ssrcStats = this.#ssrcStats[ssrc];
+
+        // validate RTP header
+        if(!this.#validateRTPHeader(rtpPacket)){
+            console.error('Invalid RTP header');
+            return;
+        }
+
+        // update inter-arrival jitter
+        const departureRTPTimestamp = rtpPacket.readUInt32BE(4);
+        this.#updateJitter(ssrc, departureRTPTimestamp);
+
+        // TODO: check for missing packets and trigger NACKs accordingly.
+
+        if(!ssrcStats.nackSentCount){
+            ssrcStats.nackSentCount = {}
+        }
+        
+        //console.log(performance.now(), 'ssrc', ssrc, 'SeqNo:', seqNo, 'Last Known SeqNo:', lastKnownSeqNo);
+        if(lastKnownSeqNo){
+            const seqNoDelta = seqNo - lastKnownSeqNo;
+            if(seqNoDelta > 1){
+                this.#handleMissingPacket(ssrc, seqNo, lastKnownSeqNo);
+            }
+            if(this.#ssrcStats[ssrc].nackSentCount[seqNo]){
+                console.log('ssrc', ssrc, 'Received missing packet:', seqNo);
+                delete ssrcStats.nackSentCount[seqNo]
             }
         }
 
-        this.#ssrcStats[ssrc].packetsSent += 1;
-        // TODO: payload may not always start at 12th byte. Check if this is fine.
-        this.#ssrcStats[ssrc].payloadBytesSent += rtpPacket.length - 12;
-        //console.log('SSRC:', ssrc, 'Packets Sent:', this.#ssrcStats[ssrc].packetsSent, 'Payload Bytes Sent:', this.#ssrcStats[ssrc].payloadBytesSent);
+    }
+
+    processFeedbackFromClient(rtcpPacket){
+
+        console.log('Feedback from client', rtcpPacket)
+        const padding = (rtcpPacket[0] >> 5) & 0b1;
+        const rrc = rtcpPacket[0] & 0b00011111;
+        
+        const packetType = rtcpPacket[1];
+        //console.log('fb from client', packetType)
+
+        if(packetType == 200){
+            
+            const ssrc = rtcpPacket.readUInt32BE(4);
+
+            const length = rtcpPacket.readUInt16BE(2);
+            const ntpTimestampMSB = rtcpPacket.readUInt32BE(8);
+            const ntpTimestampLSB = rtcpPacket.readUInt32BE(12);
+
+            const rtpTimestamp = rtcpPacket.readUInt32BE(16);
+            const packetCount = rtcpPacket.readUInt32BE(20);
+            const octetCount = rtcpPacket.readUInt32BE(24);
+            //console.log(`NTP: ${(new Date(ntpToTimeMs(ntpTimestampMSB, ntpTimestampLSB))).toLocaleString()} | RTP TS: ${rtpTimestamp}`);
+
+            if(!this.#ssrcStats[ssrc]){
+                console.log('First RTCP packet for SSRC:', ssrc);
+                this.#ssrcStats[ssrc] = {}
+            }
+            
+            this.#ssrcStats[ssrc].lastSR = {
+                timestamp: performance.now(),
+                ntpTimestampMSB,
+                ntpTimestampLSB,
+                rtpTimestamp,
+                packetCount,
+                octetCount,
+            }
+
+            const receiverReport = this.#generateReceiverReport(ssrc);
+
+            this.dispatchEvent('send_fb_i_to_client', receiverReport);
+
+        }
+    }
+
+    processFeedbackToClient(packet){
+        return packet;
+    }
+
+    processRTPToClient(rtpPacket){
+
+        const ssrc = rtpPacket.readUInt32BE(8);
+        if(!this.#outgoingSSRCStats[ssrc]){
+            this.#initOutgoingSSRCStats(ssrc);
+        }
+
+        this.#outgoingSSRCStats[ssrc].packetsSent += 1;
+
+        const extensionInfo = RTPContext.parseHeaderExtensions(rtpPacket);
+        this.#outgoingSSRCStats[ssrc].payloadBytesSent += rtpPacket.length - 12 - extensionInfo.extensionsBufferLength;
+
+        // TODO: update SSRC
+        rtpPacket = this.#updateSSRCInPacket(rtpPacket);
+
+        // TODO: trigger Sender Report (asynchronously) if required
+        // triggerSR();
+
+        return rtpPacket;
+    
+    }
+
+    #initOutgoingSSRCStats(ssrc){
+        this.#outgoingSSRCStats[ssrc] = {
+            packetsSent: 0,
+            payloadBytesSent: 0,
+            baseWallclockTime: performance.now(),
+            baseRTPTimestamp: 0,
+        }
+    }
+
+    #updateSSRCInPacket(packet){
+        return packet;
+    }
+
+    /**
+     * 
+     * @typedef {Object} HeaderExtensionsInfo
+     * @property {Boolean} areExtensionsPresent - Boolean indicating if header extensions are present.
+     * @property {Number} extensionsBufferLength - Length of the buffer containing the header extensions. Includes the 0xBEDE header, the extensions and the padding
+     */
+    
+    /** 
+     * @param {*} rtpPacket 
+     * @returns {HeaderExtensionsInfo} Information about the header extensions
+     */
+    static parseHeaderExtensions(rtpPacket){
+        // parse header extensions
+        const areExtensionsPresent = rtpPacket[0] & 0b00010000;
+
+        const extensions = []
+
+        /**
+         * includes the 0xBEDE header, the extensions and the padding
+         */
+        let extensionsBufferLength = 0;
+
+        if(areExtensionsPresent){
+            const isOneByteHeaderMode = rtpPacket.readUInt16BE(12) == 0xBEDE;
+            const extensionLength = rtpPacket.readUInt16BE(14);
+            // console.log('Extension Length:', extensionLength);
+
+            if(extensionLength > 20){
+                console.error('Extension length too long', extensionLength, rtpPacket);
+            }
+
+            else{
+                //console.log('Extensions present', rtpPacket);
+                let start = 16;
+                for(let i = 0; i < extensionLength; i++){
+                    const extId = (rtpPacket[start] & 0b11110000) >> 4;
+                    const extLength = (rtpPacket[start] & 0b00001111) + 1;
+                    const extValue = rtpPacket.slice(start + 1, start + 1 + extLength);
+                    //console.log(start, rtpPacket[start], 'Extension:', extId, extLength, extValue);
+
+                    start += 1 + extLength;
+
+                    extensions.push({
+                        id: extId,
+                        length: extLength,
+                        value: extValue
+                    })
+                }
+                
+                // padding
+                const padding = 4 - (start % 4);
+
+                extensionsBufferLength = (start + padding) - 12;
+
+                //console.log(rtpPacket.readUInt16BE(2), 'No of Extensions:', extensionLength, 'One byte header mode:', isOneByteHeaderMode, 'Extensions Buffer Length:', extensionsBufferLength, 'start', start, 'Padding:', padding);
+            }
+            
+        }
+
+        
+        return {
+            areExtensionsPresent,
+            extensionsBufferLength,
+            extensions
+        }
     }
 
 }
