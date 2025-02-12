@@ -28,19 +28,7 @@ class PeerContext extends CustomEventTarget{
      */
     iceContext = new ICEContext({onPacketReceived: this.allocatePacketToAppropriateMethod.bind(this)});
 
-    // TODO: direction is a property of transceiver, not peer itself. need to change it.
-    selfDirection = null;
-    remoteDirection = null;
-
     rtpStreamSubscriberCallbacks = {};
-
-    #remoteSSRCStreams = {
-        null: {
-            rtp: new SimpleStream(),
-            rtcpEvents: new SimpleStream()
-        }
-    };
-    #localSSRCStreams = {};
 
     #dtlsContext = new DTLSContext();
     #srtpContext = new SRTPContext();
@@ -126,7 +114,7 @@ class PeerContext extends CustomEventTarget{
 
 
             // 6. Add the self certificate fingerprint to answer
-            const fp = this.formatFingerprint(await getFingerprintOfCertificate())
+            const fp = this.#formatFingerprint(await getFingerprintOfCertificate())
             console.log(this.#peerId, 'our fingerprint', fp);
             sessionAttributesBlock +=  (fp) + '\r\n';
 
@@ -294,7 +282,7 @@ class PeerContext extends CustomEventTarget{
         })
     }
 
-    formatFingerprint(hash) {
+    #formatFingerprint(hash) {
         // Format the hash as specified
         const formattedFingerprint = hash.match(/.{2}/g).join(':');
         return `a=fingerprint:sha-256 ${formattedFingerprint}`;
