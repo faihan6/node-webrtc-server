@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { PRF } = require('../helpers/crypto_helper');
-const {RTPContext} = require('./rtp');
+const { CustomEventTarget } = require('../helpers/common_helper');
 
 const DIV = (a, t) => t ? Math.floor(a / t) : 0;
 const TLS_EXTRACTOR_LABEL = Buffer.from('EXTRACTOR-dtls_srtp', 'utf8');
@@ -37,7 +37,7 @@ const PROFILE_PARAMS = {
  * Processing is taken care by the super (RTPContext) class.
  * Actual writing on the wire and actual listening from the wire are outside the scope of this class.
  */
-class SRTPContext{
+class SRTPContext extends CustomEventTarget{
     keyDerivationRate = 0x00;
     srtpMasterKeyLength = 16; // bytes
     srtpMasterSaltLength = 14; // bytes
@@ -55,7 +55,16 @@ class SRTPContext{
 
     srtcpIndexCount = {}
 
-    constructor(){}
+    static SRTP_STATE = {
+        NEW: 1,
+        CONNECTED: 2
+    }
+
+    state = SRTPContext.SRTP_STATE.NEW;
+
+    constructor(){
+        super()
+    }
 
 
     initSRTP(tlsParams){
@@ -89,6 +98,9 @@ class SRTPContext{
             //     server - srtcpSaltKey       : ${this.srtpParams.serverKeys.srtcpSaltKey.toString('hex')}
             // `);
         }
+
+        this.state = SRTPContext.SRTP_STATE.CONNECTED;
+        this.dispatchEvent('srtpConnected');
     
     }
     
@@ -500,6 +512,15 @@ class SRTPContext{
 
         const {lastKnownROC} = this.rocSeqNoWithSSRCMap[ssrc];
         return ((2 ** 16) * lastKnownROC) + sequenceNumber;
+    }
+
+    getConnectedPromise(){
+
+        if(this.state == SRTPContext.SRTP_STATE.CONNECTED){
+            return Promise.resolve();
+        }
+
+        return new Promise(res => this.addEventListener('srtpConnected', res));
     }
 
 }

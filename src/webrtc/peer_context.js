@@ -3,7 +3,6 @@ const { ICEContext } = require('./stun');
 const { DTLSContext, getFingerprintOfCertificate } = require('./dtls')
 const { RTPContext } = require('./rtp');
 const { SRTPContext } = require('./srtp');
-const { SimpleStream } = require('../helpers/simple_stream');
 const { Transceiver } = require('./transceiver');
 const { CustomEventTarget } = require('../helpers/common_helper');
 
@@ -28,7 +27,7 @@ class PeerContext extends CustomEventTarget{
      */
     iceContext = new ICEContext({onPacketReceived: this.#allocatePacketToAppropriateMethod.bind(this)});
     #dtlsContext = new DTLSContext();
-    #srtpContext = new SRTPContext();
+    #srtpContext = null;
 
     #rtpContext = new RTPContext();
 
@@ -54,8 +53,6 @@ class PeerContext extends CustomEventTarget{
         vBlock += 's=NODEPEER\r\n';
         vBlock += 't=0 0\r\n';
 
-        let sessionAttributesBlock = ''
-
         // 1. extract all the candidates from the offer
         const remoteCandidates = [];
         offer.sdp.split('\r\n').forEach(line => {
@@ -63,6 +60,9 @@ class PeerContext extends CustomEventTarget{
                 remoteCandidates.push(line);
             }
         });
+
+
+        let sessionAttributesBlock = ''
 
         // 2. Add the self candidate to answer
         for(const candidateStr of this.iceContext.getCandidates()){
@@ -97,6 +97,8 @@ class PeerContext extends CustomEventTarget{
 
             // 6.1 add setup attribute
             sessionAttributesBlock += 'a=setup:passive\r\n';
+
+            this.#srtpContext = new SRTPContext();
         }
         else{
             if(globalThis.serverConfig.disableWebRTCEncryption){
@@ -302,7 +304,7 @@ class PeerContext extends CustomEventTarget{
         else{
             ssrc = packet.readUInt32BE(8);
         }
-        console.log(this.#peerId, 'ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType);
+        //console.log(this.#peerId, 'ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType);
         
         const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
         const {mid, source} = this.#identifyMIDOfPacket(packet, ssrc, extensionsInfo);

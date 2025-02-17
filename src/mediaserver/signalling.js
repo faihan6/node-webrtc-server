@@ -28,12 +28,18 @@ function initializeSignalling(){
                     //make the sender subscribe to the receiver's RTCP events
                     if(sender){
 
-                        const rtpStream = sender.peer.subscribeToRTPStream(null);
-                        receiver.peer.addRTPStream(rtpStream);
+                        await new Promise(res => receiver.peer.addEventListener('signalling_stable', res));
+                        console.log('signalling is done for receiver peer', receiver.userId);
 
-                        // TODO: ideally we need to subscribe only for Events (PLI and FIR) not for all RTP packets.
-                        const eventStream = receiver.peer.subscribeToRTCPEventsStream(null);
-                        sender.peer.addRTCPEventsStream(eventStream);
+                        const mids = [0, 1];
+                        
+                        for(const mid of mids){
+                            console.log(receiver.userId, 'Subscribing to mid', mid);
+
+                            const stream = sender.peer.transceivers[mid].getReceiverStream();
+                            receiver.peer.transceivers[mid].setSenderStream(stream);
+                        }
+
                     }
                 }
                 else if(message.params.userId == 'my-sender-1'){
@@ -52,7 +58,12 @@ function initializeSignalling(){
                         for(const mid of mids){
                             console.log(receiver.userId, 'Subscribing to mid', mid);
                             const stream = sender.peer.transceivers[mid].getReceiverStream();
-                            receiver.peer.transceivers[mid].setSenderStream(stream);
+                            const recvTx = receiver.peer.transceivers[mid];
+
+                            if(recvTx.srtpContext){
+                                await recvTx.srtpContext.getConnectedPromise();
+                            }
+                            recvTx.setSenderStream(stream);
                         }
                         
                     }

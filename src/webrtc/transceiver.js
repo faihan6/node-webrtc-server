@@ -47,7 +47,7 @@ class Transceiver extends CustomEventTarget{
     #dtlsContext = null;
 
     #rtpContext = new RTPContext();;
-    #srtpContext = null;
+    srtpContext = null;
 
     #senderStream = null;
     #receiverStream = null;
@@ -62,12 +62,12 @@ class Transceiver extends CustomEventTarget{
 
         this.#iceContext = iceContext;
         this.#dtlsContext = dtlsContext;
-        this.#srtpContext = srtpContext;
+        this.srtpContext = srtpContext;
 
         this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? new RTPStream() : null;
 
         this.#dtlsContext.addEventListener('dtlsParamsReady', params => {
-            this.#srtpContext.initSRTP(params);
+            this.srtpContext.initSRTP(params);
         });
 
         this.#rtpContext.addEventListener('send_fb_i_to_client', packet => this.#sendPacketToClient(packet));
@@ -95,9 +95,9 @@ class Transceiver extends CustomEventTarget{
 
     #sendPacketToClient(packet){
         // encrypt the packet if required
-        if(this.#srtpContext){
+        if(this.srtpContext){
             const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
-            packet = this.#srtpContext.encryptPacket(packet, extensionsInfo);
+            packet = this.srtpContext.encryptPacket(packet, extensionsInfo);
         }
         this.#iceContext.sendPacket(packet);
     }
@@ -107,8 +107,18 @@ class Transceiver extends CustomEventTarget{
         const rtpPayloadType = packet[1] & 0b01111111;
         const rtcpPacketType = packet[1];
 
+        console.log('Received packet from producer', rtpPayloadType, rtcpPacketType, packet.slice(0, 18));
+
         // process RTP
         if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            /*
+                Receiving client is not able to demux RTP packets when sender joins first and receiver joins next. 
+                Happens since RTP packets in the middle of stream have neither extension headers, nor ssrcs specified in SDP.
+
+                TODO: Do one of the following
+                    1. If this is one of first few packets in this outgoing ssrc, add mid extenion (if supported)
+                    2. Change SSRC to the one mapped for this TX (RTPContext)
+            */
             packet = this.#fixPayloadType(packet, packetInfo);
             packet = this.#rtpContext.processRTPToClient(packet);
         }
@@ -143,9 +153,9 @@ class Transceiver extends CustomEventTarget{
 
         if((rtpPayloadType >= 96 && rtpPayloadType <= 127)){
             // RTP-i
-            if(this.#srtpContext){
+            if(this.srtpContext){
                 const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
-                packet = this.#srtpContext.decryptPacket(packet, extensionsInfo);
+                packet = this.srtpContext.decryptPacket(packet, extensionsInfo);
             }
             this.#rtpContext.processRTPFromClient(packet);
         }
@@ -157,16 +167,16 @@ class Transceiver extends CustomEventTarget{
     }
 
     handleSenderReportFromClient(packet){
-        if(this.#srtpContext){
-            packet = this.#srtpContext.decryptPacket(packet);
+        if(this.srtpContext){
+            packet = this.srtpContext.decryptPacket(packet);
         }
         this.#rtpContext.processFeedbackFromClient(packet);
         this.#receiverStream.controller.write(packet);
     }
 
     handleFeedbackForProducerFromClient(packet){
-        if(this.#srtpContext){
-            packet = this.#srtpContext.decryptPacket(packet);
+        if(this.srtpContext){
+            packet = this.srtpContext.decryptPacket(packet);
         }
         this.#senderStream.feedback(packet);
     }
