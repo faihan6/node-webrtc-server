@@ -19,7 +19,7 @@ class RTPStream extends CustomEventTarget{
     }
 
     feedback(...data){
-        this.#onFeedback(...data);
+        this.#onFeedback?.(...data);
     }
 
 }

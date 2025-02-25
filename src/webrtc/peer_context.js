@@ -243,6 +243,12 @@ class PeerContext extends CustomEventTarget{
                 if (line.startsWith('a=rtpmap') && (line.includes('VP8') || line.includes('opus'))) {
                     return true;
                 }
+                if(line.startsWith('a=rtcp-fb')){
+                    const payloadType = line.match(/a=rtcp-fb:(\d+)/)[1];
+                    if(payloadTypes[payloadType] && line.includes('nack')){
+                        return true;
+                    }
+                }
                 if (line.startsWith('a=mid')) {
                     return true;
                 }
@@ -375,6 +381,19 @@ class PeerContext extends CustomEventTarget{
             mid = this.ssrcMIDMap[ssrc];
             source = 'ssrc';
         }
+
+        const rtcpPacketType = packet[1];
+        if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
+            // this is a RTCP packet! allocate it to the correct transceiver
+            const tx = Object.values(this.transceivers).find(tx => tx.outgoingSSRC == ssrc);
+            if(tx){
+                //console.log(this.#peerId, 'tx found for ssrc', ssrc, tx.outgoingSSRC);
+                mid = tx.mid;
+                source = 'SDP';
+                this.ssrcMIDMap[ssrc] = mid;
+            }
+        }
+        
 
         if(mid == null || mid == undefined){
             console.log(this.#peerId, 'mid not found for ssrc', ssrc, packet.slice(0,35));

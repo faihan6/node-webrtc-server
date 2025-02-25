@@ -13,7 +13,24 @@ class RTPContext extends CustomEventTarget{
     static #RTP_SEQ_MOD = 1 << 16 
 
     #ssrcStats = {};
-    #outgoingSSRCStats = {};
+    #outgoingSSRCStats = {
+        packetsSent: 0,
+        payloadBytesSent: 0,
+        baseWallclockTime: performance.now(),
+        baseRTPTimestamp: 0,
+
+        // random no between 0 and 2^32 - 1
+        lastOriginalSSRC: null,
+        lastPacketSentWallclockTime: null,
+        lastPacketSentRTPTime: null,
+        lastPacketSentSeqNo: null,
+
+        initialRTPtimestamp: Math.floor(Math.random() * 4294967295),
+        initialSequenceNumber: Math.floor(Math.random() * 65535),
+        rtpTimestampOffset : null,
+        sequenceNumberOffset: null,
+
+    };
 
     #outgoingSSRC = null;
 
@@ -438,44 +455,87 @@ class RTPContext extends CustomEventTarget{
     }
 
     processFeedbackToClient(packet){
+
+        // change ssrc to outgoingSSRCStats.lastOriginalSSRC
+
+        let targetSSRC;
+        let maxTimestamp = Number.MIN_VALUE;
+        for(const ssrc of Object.keys(this.#ssrcStats)){
+            const arrivalTimestamp = this.#ssrcStats[ssrc].lastArrivalWallclockTime;
+            console.log(`ssrc ${ssrc} last arrived at ${arrivalTimestamp}`)
+            if(arrivalTimestamp > maxTimestamp){
+                maxTimestamp = arrivalTimestamp;
+                targetSSRC = ssrc
+            }
+        }
+
+        console.log('rewriting RTCP SSRC to', targetSSRC)
+        packet.writeUInt32BE(targetSSRC, 8);
         return packet;
     }
 
     processRTPToClient(rtpPacket){
 
-        const ssrc = rtpPacket.readUInt32BE(8);
-        if(!this.#outgoingSSRCStats[ssrc]){
-            this.#initOutgoingSSRCStats(ssrc);
+        const packetSSRC = rtpPacket.readUInt32BE(8);
+        const packetRTPTimestamp = rtpPacket.readUInt32BE(4);
+        const packetSequenceNo = rtpPacket.readUInt16BE(2);
+
+        if(this.#outgoingSSRCStats.rtpTimestampOffset == null){
+            this.#outgoingSSRCStats.rtpTimestampOffset = this.#outgoingSSRCStats.initialRTPtimestamp - packetRTPTimestamp;
+        }
+        if(this.#outgoingSSRCStats.sequenceNumberOffset == null){
+            this.#outgoingSSRCStats.sequenceNumberOffset = this.#outgoingSSRCStats.initialSequenceNumber - packetSequenceNo;
         }
 
-        this.#outgoingSSRCStats[ssrc].packetsSent += 1;
+        let newRTPTimestamp;
+        let newSequenceNo;
+
+        const lastSSRC = this.#outgoingSSRCStats.lastOriginalSSRC;
+        if(lastSSRC == null || lastSSRC == packetSSRC){
+            //console.log('packet is from same Stream', 'SSRC:', packetSSRC);
+        }
+        else{
+            console.log('packet is from new Stream', 'SSRC changed from', lastSSRC, 'to', packetSSRC);
+
+            // TODO: get it from SDP.
+            const clockRate = 90000;
+            const timeDeltaInRTPUnits = (performance.now() - this.#outgoingSSRCStats.lastPacketSentWallclockTime) * 1000 * clockRate;
+
+            this.#outgoingSSRCStats.rtpTimestampOffset = this.#outgoingSSRCStats.lastPacketSentRTPTime + timeDeltaInRTPUnits - packetRTPTimestamp;
+            this.#outgoingSSRCStats.sequenceNumberOffset = this.#outgoingSSRCStats.lastPacketSentSeqNo + 1 - packetSequenceNo;
+
+        }
+        newRTPTimestamp = (packetRTPTimestamp + this.#outgoingSSRCStats.rtpTimestampOffset) % 4294967295;
+        newSequenceNo = (packetSequenceNo + this.#outgoingSSRCStats.sequenceNumberOffset) % 65536;
+
+        this.#outgoingSSRCStats.packetsSent += 1;
 
         const extensionInfo = RTPContext.parseHeaderExtensions(rtpPacket);
-        this.#outgoingSSRCStats[ssrc].payloadBytesSent += rtpPacket.length - 12 - extensionInfo.extensionsBufferLength;
+        this.#outgoingSSRCStats.payloadBytesSent += rtpPacket.length - 12 - extensionInfo.extensionsBufferLength;
 
-        // TODO: update SSRC
-        rtpPacket = this.#updateSSRCInPacket(rtpPacket);
+        // TODO: update sequence number, RTP timestamp and SSRC in the packet
+        try{
+        rtpPacket.writeUInt16BE(newSequenceNo, 2);
+        rtpPacket.writeUInt32BE(newRTPTimestamp, 4);
+        rtpPacket.writeUInt32BE(this.#outgoingSSRC, 8);
+        }
+        catch(e){
+            console.log(`newSequenceNo: ${newSequenceNo} | newRTPTimestamp: ${newRTPTimestamp} | outgoingSSRC: ${this.#outgoingSSRC}`);
+            console.log(rtpPacket);
+            throw e;
+        }
 
         // TODO: trigger Sender Report (asynchronously) if required
         // triggerSR();
 
+        // TODO: update lastKnown values
+        this.#outgoingSSRCStats.lastOriginalSSRC = packetSSRC;
+        this.#outgoingSSRCStats.lastPacketSentWallclockTime = performance.now();
+        this.#outgoingSSRCStats.lastPacketSentRTPTime = newRTPTimestamp;
+        this.#outgoingSSRCStats.lastPacketSentSeqNo = newSequenceNo;
+
         return rtpPacket;
     
-    }
-
-    #initOutgoingSSRCStats(ssrc){
-        this.#outgoingSSRCStats[ssrc] = {
-            packetsSent: 0,
-            payloadBytesSent: 0,
-            baseWallclockTime: performance.now(),
-            baseRTPTimestamp: 0,
-        }
-    }
-
-    #updateSSRCInPacket(packet){
-        //console.log('Updating SSRC in packet', this.#outgoingSSRC);
-        packet.writeUInt32BE(this.#outgoingSSRC, 8);
-        return packet;
     }
 
     /**

@@ -52,7 +52,7 @@ class Transceiver extends CustomEventTarget{
     #senderStream = null;
     #receiverStream = null;
 
-    #handleRTPFromSenderStream = (packet, packetInfo) => this.#processRTPFromProducer(packet, packetInfo)
+    #handleRTPFromSenderStream = (packet, packetInfo) => this.#handleRTPToClient(packet, packetInfo)
 
     constructor({mid, direction, mediaType, extensions, payloadTypes, iceContext, dtlsContext, srtpContext}){
         super();
@@ -66,10 +66,12 @@ class Transceiver extends CustomEventTarget{
         this.#dtlsContext = dtlsContext;
         this.srtpContext = srtpContext;
 
-        const outgoingSSRC = 100 + Number(mid);
-        this.#rtpContext = new RTPContext(outgoingSSRC);
+        this.outgoingSSRC = 100 + Number(mid);
+        this.#rtpContext = new RTPContext(this.outgoingSSRC);
 
-        this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? new RTPStream() : null;
+        this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? 
+            new RTPStream((...data) => this.#handleRTCPToClient(...data)) : 
+            null;
 
         this.#dtlsContext.addEventListener('dtlsParamsReady', params => {
             this.srtpContext.initSRTP(params);
@@ -105,37 +107,6 @@ class Transceiver extends CustomEventTarget{
             packet = this.srtpContext.encryptPacket(packet, extensionsInfo);
         }
         this.#iceContext.sendPacket(packet);
-    }
-
-    #processRTPFromProducer(packet, packetInfo){
-
-        const rtpPayloadType = packet[1] & 0b01111111;
-        const rtcpPacketType = packet[1];
-
-        //console.log('Received packet from producer', rtpPayloadType, rtcpPacketType, packet.slice(0, 18));
-
-        // process RTP
-        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-            /*
-                Receiving client is not able to demux RTP packets when sender joins first and receiver joins next. 
-                Happens since RTP packets in the middle of stream have neither extension headers, nor ssrcs specified in SDP.
-
-                TODO: Do one of the following
-                    1. If this is one of first few packets in this outgoing ssrc, add mid extenion (if supported)
-                    2. Change SSRC to the one mapped for this TX (RTPContext)
-            */
-            packet = this.#fixPayloadType(packet, packetInfo);
-            packet = this.#rtpContext.processRTPToClient(packet);
-        }
-        else{
-            // Must be RTCP Sender Report
-            packet = this.#rtpContext.processFeedbackToClient(packet);
-        }
-
-        this.#sendPacketToClient(packet);
-        
-        
-        
     }
 
     setSenderStream(stream){
@@ -187,7 +158,111 @@ class Transceiver extends CustomEventTarget{
         if(this.srtpContext){
             packet = this.srtpContext.decryptPacket(packet);
         }
+        
+        // check if packet is NACK/PLI/FIR/TWCC/RR and print log
+        const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
+        const packetType = packet[1]; // RTCP Packet Type
+
+        switch (packetType) {
+            case 201:
+                console.log("got Receiver Report (RR)");
+                break;
+            case 205:
+                if (fmt === 1) {
+                    console.log("got NACK (Negative Acknowledgment)");
+                } else if (fmt === 15) {
+                    console.log("got TWCC (Transport-Wide Congestion Control)");
+                } else {
+                    console.log("git Unknown RTPFB packet");
+                }
+                break;
+            case 206:
+                if (fmt === 1) {
+                    console.log("got PLI (Picture Loss Indication)");
+                } else if (fmt === 4) {
+                    console.log("got FIR (Full Intra Request)");
+                } else {
+                    console.log("got Unknown Payload specific FB packet");
+                }
+                break;
+            default:
+                console.log("got Unknown RTCP packet type:", packetType);
+
+        }
+
         this.#senderStream.feedback(packet);
+    }
+
+
+    #handleRTPToClient(packet, packetInfo){
+
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1];
+
+        //console.log('Received packet from producer', rtpPayloadType, rtcpPacketType, packet.slice(0, 18));
+
+        // process RTP
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            /*
+                Receiving client is not able to demux RTP packets when sender joins first and receiver joins next. 
+                Happens since RTP packets in the middle of stream have neither extension headers, nor ssrcs specified in SDP.
+
+                TODO: Do one of the following
+                    1. If this is one of first few packets in this outgoing ssrc, add mid extenion (if supported)
+                    2. Change SSRC to the one mapped for this TX (RTPContext)
+            */
+            packet = this.#fixPayloadType(packet, packetInfo);
+            packet = this.#rtpContext.processRTPToClient(packet);
+        }
+        else{
+            // Must be RTCP Sender Report. We will generate our own SR. ignore..
+            //packet = this.#rtpContext.processFeedbackToClient(packet);
+        }
+
+        this.#sendPacketToClient(packet);
+        
+        
+        
+    }
+
+    #handleRTCPToClient(packet){
+
+        //TODO: ideally, you need to debounce/throttle the RTCP packets to be sent to the client
+
+        const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
+        const packetType = packet[1]; // RTCP Packet Type
+
+        switch (packetType) {
+            case 201:
+                console.log("sending Receiver Report (RR)");
+                break;
+            case 205:
+                if (fmt === 1) {
+                    console.log("sending NACK (Negative Acknowledgment)");
+                } else if (fmt === 15) {
+                    console.log("sending TWCC (Transport-Wide Congestion Control)");
+                } else {
+                    console.log("sending Unknown RTPFB packet");
+                }
+                break;
+            case 206:
+                if (fmt === 1) {
+                    console.log("sending PLI (Picture Loss Indication)");
+                } else if (fmt === 4) {
+                    console.log("sending FIR (Full Intra Request)");
+                } else {
+                    console.log("Unknown Payload specific FB packet");
+                }
+                break;
+            default:
+                console.log("Unknown RTCP packet type:", packetType);
+
+        }
+        const ssrc = packet.readUInt32BE(8)
+        packet = this.#rtpContext.processFeedbackToClient(packet);
+        const ssrcAfter = packet.readUInt32BE(8);
+        console.log('SSRC in RTCP packet', ssrc, 'SSRC after processing', ssrcAfter);
+        this.#sendPacketToClient(packet);
     }
     
 }
