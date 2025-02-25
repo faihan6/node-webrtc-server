@@ -15,8 +15,11 @@ class RTPContext extends CustomEventTarget{
     #ssrcStats = {};
     #outgoingSSRCStats = {};
 
-    constructor(){
+    #outgoingSSRC = null;
+
+    constructor(outgoingSSRC){
         super();
+        this.#outgoingSSRC = outgoingSSRC;
     }
 
     #validateRTPHeader(rtpPacket){
@@ -393,7 +396,7 @@ class RTPContext extends CustomEventTarget{
 
     processFeedbackFromClient(rtcpPacket){
 
-        console.log('Feedback from client', rtcpPacket)
+        //console.log('Feedback from client', rtcpPacket)
         const padding = (rtcpPacket[0] >> 5) & 0b1;
         const rrc = rtcpPacket[0] & 0b00011111;
         
@@ -470,6 +473,8 @@ class RTPContext extends CustomEventTarget{
     }
 
     #updateSSRCInPacket(packet){
+        //console.log('Updating SSRC in packet', this.#outgoingSSRC);
+        packet.writeUInt32BE(this.#outgoingSSRC, 8);
         return packet;
     }
 

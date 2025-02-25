@@ -4,10 +4,10 @@ class UserContext{
 
     ws = null;
 
-    constructor(data){
+    constructor({userId, ws}){
 
-        this.userId = Math.random().toString(36).substring(7);
-        this.ws = data.ws;
+        this.userId = userId;
+        this.ws = ws;
         this.peer = new PeerContext({id: this.userId});
 
         console.log(`New client connected : user ${this.userId}`);
@@ -18,7 +18,9 @@ class UserContext{
             const data = JSON.parse(message);
 
             if(data.type == 'offer'){
-                const answer = await this.peer.generateAnswer(data);
+
+                this.peer.setRemoteDescription(data);
+                const answer = await this.peer.generateAnswer();
                 this.ws.send(JSON.stringify({type: 'answer', sdp: answer}));
             }
 

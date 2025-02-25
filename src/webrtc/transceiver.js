@@ -46,11 +46,13 @@ class Transceiver extends CustomEventTarget{
     #iceContext = null;
     #dtlsContext = null;
 
-    #rtpContext = new RTPContext();;
+    #rtpContext = null;
     srtpContext = null;
 
     #senderStream = null;
     #receiverStream = null;
+
+    #handleRTPFromSenderStream = (packet, packetInfo) => this.#processRTPFromProducer(packet, packetInfo)
 
     constructor({mid, direction, mediaType, extensions, payloadTypes, iceContext, dtlsContext, srtpContext}){
         super();
@@ -63,6 +65,9 @@ class Transceiver extends CustomEventTarget{
         this.#iceContext = iceContext;
         this.#dtlsContext = dtlsContext;
         this.srtpContext = srtpContext;
+
+        const outgoingSSRC = 100 + Number(mid);
+        this.#rtpContext = new RTPContext(outgoingSSRC);
 
         this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? new RTPStream() : null;
 
@@ -107,7 +112,7 @@ class Transceiver extends CustomEventTarget{
         const rtpPayloadType = packet[1] & 0b01111111;
         const rtcpPacketType = packet[1];
 
-        console.log('Received packet from producer', rtpPayloadType, rtcpPacketType, packet.slice(0, 18));
+        //console.log('Received packet from producer', rtpPayloadType, rtcpPacketType, packet.slice(0, 18));
 
         // process RTP
         if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
@@ -135,8 +140,12 @@ class Transceiver extends CustomEventTarget{
 
     setSenderStream(stream){
         if(this.direction == 'sendrecv' || this.direction == 'sendonly'){
+
+            // remove previous listener, if any
+            this.#senderStream?.removeEventListener('data', this.#handleRTPFromSenderStream);
+
             this.#senderStream = stream;
-            this.#senderStream.addEventListener('data', (packet, packetInfo) => this.#processRTPFromProducer(packet, packetInfo));
+            this.#senderStream.addEventListener('data', this.#handleRTPFromSenderStream);
         }
         else{
             throw new Error('Cannot set sender stream for a recvonly transceiver');

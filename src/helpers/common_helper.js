@@ -34,6 +34,14 @@ class CustomEventTarget{
             listener(...args);
         }
     }
+
+    removeEventListener(type, listener){
+        if(!this.listeners[type]){
+            return;
+        }
+
+        this.listeners[type] = this.listeners[type].filter(l => l != listener);
+    }
 }
 
 function getFormattedHexBuffer(buffer){

@@ -13,6 +13,15 @@ const supportedCodecs = {
 
 const supportedHeaderExtensions = globalThis.serverConfig.supportedHeaderExtensions;
 
+/** @enum {string} */
+const SIGNALLING_STATE = {
+    NEW: 'new',
+    HAVE_LOCAL_OFFER: 'have-local-offer',
+    HAVE_REMOTE_OFFER: 'have-remote-offer',
+    STABLE: 'stable',
+    CLOSED: 'closed'
+}
+
 class PeerContext extends CustomEventTarget{
 
     #peerId = null;
@@ -29,8 +38,6 @@ class PeerContext extends CustomEventTarget{
     #dtlsContext = new DTLSContext();
     #srtpContext = null;
 
-    #rtpContext = new RTPContext();
-
     rtpStreamSubscriberCallbacks = {};
 
 
@@ -38,12 +45,27 @@ class PeerContext extends CustomEventTarget{
 
     #isUsingEncryption = true;
 
+    signallingState = SIGNALLING_STATE.NEW
+
+    remoteOffer = null;
+
     constructor({id}){
         super();
         this.#peerId = id;
     }
 
-    async generateAnswer(offer) {
+    setRemoteDescription(offer){
+        this.signallingState = SIGNALLING_STATE.HAVE_REMOTE_OFFER;
+        this.remoteOffer = offer;
+    }
+
+    async generateAnswer() {
+
+        const offer = this.remoteOffer;
+        
+        if(this.signallingState != SIGNALLING_STATE.HAVE_REMOTE_OFFER){
+            throw new Error('Invalid signalling state');
+        }
 
         let answer = '';
 
@@ -65,7 +87,7 @@ class PeerContext extends CustomEventTarget{
         let sessionAttributesBlock = ''
 
         // 2. Add the self candidate to answer
-        for(const candidateStr of this.iceContext.getCandidates()){
+        for(const candidateStr of await this.iceContext.getCandidates()){
             sessionAttributesBlock += candidateStr;
         }
 
@@ -202,7 +224,6 @@ class PeerContext extends CustomEventTarget{
                 extensions,
                 iceContext: this.iceContext,
                 dtlsContext: this.#dtlsContext,
-                rtpContext: this.#rtpContext,
                 srtpContext: this.#srtpContext
             });
             this.transceivers[mid] = tx;
@@ -240,6 +261,17 @@ class PeerContext extends CustomEventTarget{
                 mBlock += '\r\n' + sessAttrBlockFixed;
             }
 
+            // add ssrc and stream id
+            //TODO: ideally, try to get it from tx.rtpContext.outgoingSSRC
+            const outgoingSSRC = 100 + Number(mid);
+            const streamId = `stream_${Math.floor(Number(mid) / 2)}`
+            const trackId = `track_${Number(mid) % 2}`
+
+            let ssrcLine = `a=ssrc:${outgoingSSRC} msid:${streamId} ${trackId}\r\n`;
+            ssrcLine += `a=msid:${streamId} ${trackId}`;
+
+            mBlock += '\r\n' + ssrcLine;
+
             // 8.2 add m=
             const mLine = `m=${mediaType} 9 UDP/TLS/RTP/SAVPF ${Object.keys(payloadTypes).join(' ')}\r\n`;
             mBlock = mLine + mBlock
@@ -257,6 +289,7 @@ class PeerContext extends CustomEventTarget{
 
         answer = vBlock + answer;
 
+        this.signallingState = SIGNALLING_STATE.STABLE;
         this.dispatchEvent('signalling_stable');
 
         return answer;

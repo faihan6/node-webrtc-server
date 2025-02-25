@@ -1,73 +1,51 @@
 const WebSocket = require('ws');
 const { UserContext } = require('./user_context');
 
+const users = []
+const wsUserMap = new Map();
+
+
 function initializeSignalling(){
     const server = new WebSocket.Server({ port: 8080 });
-    const users = []
-
-    const receivers = [];
-    let sender = null;
 
     server.on('connection', (ws) => {
-        const user = new UserContext({ws});
-        users.push(user);
 
-        console.log(`New client connected : user ${user.userId} | direction: ${user.peer.selfDirection}`);
+        console.log(`client connected`);
         
         ws.addEventListener('message', async (event) => {
             const message = JSON.parse(event.data);
-            
+            console.log('Received message', message);
             if(message.method == 'login'){
-                if(message.params.userId.includes('my-receiver')){
-                    const receiver = user
-                    receivers.push(receiver);
+                const userId = message.params.userId;
+                const user = new UserContext({ws, userId});
+                users.push(user);
+                wsUserMap.set(ws, user);
 
-                    
-                    // If there is a sender, 
-                    // make the receiver subscribe to the sender's RTP stream
-                    //make the sender subscribe to the receiver's RTCP events
-                    if(sender){
+                console.log(`client loggedIn: user ${user.userId} | direction: ${user.peer.selfDirection}`);
+            }
 
-                        await new Promise(res => receiver.peer.addEventListener('signalling_stable', res));
-                        console.log('signalling is done for receiver peer', receiver.userId);
+            if(message.method == 'subscribe'){
+                const producerId = message.params.producerId;
+                const audioMid = message.params.audioMid;
+                const videoMid = message.params.videoMid;
 
-                        const mids = [0, 1];
-                        
-                        for(const mid of mids){
-                            console.log(receiver.userId, 'Subscribing to mid', mid);
+                const sender = users.find(user => user.userId == producerId);
+                const receiver = wsUserMap.get(ws);
 
-                            const stream = sender.peer.transceivers[mid].getReceiverStream();
-                            receiver.peer.transceivers[mid].setSenderStream(stream);
-                        }
-
-                    }
+                if(receiver.peer.signallingState != 'stable'){
+                    console.log('waiting for signalling to be done for receiver peer', receiver.userId);
+                    await new Promise(res => receiver.peer.addEventListener('signalling_stable', res));
                 }
-                else if(message.params.userId == 'my-sender-1'){
-                    sender = user;
+                console.log('signalling is done for receiver peer', receiver.userId);
 
-                    console.log('Sender is ready');
-                    console.log('receivers are..', receivers);
+                const audioStream = sender.peer.transceivers[0].getReceiverStream();
+                receiver.peer.transceivers[audioMid].setSenderStream(audioStream);
 
-                    await new Promise(res => sender.peer.addEventListener('signalling_stable', res));
-            
-                    
-                    for(const receiver of receivers){
-                        
-                        const mids = [0, 1];
-                        
-                        for(const mid of mids){
-                            console.log(receiver.userId, 'Subscribing to mid', mid);
-                            const stream = sender.peer.transceivers[mid].getReceiverStream();
-                            const recvTx = receiver.peer.transceivers[mid];
+                const videoStream = sender.peer.transceivers[1].getReceiverStream();
+                receiver.peer.transceivers[videoMid].setSenderStream(videoStream);
 
-                            if(recvTx.srtpContext){
-                                await recvTx.srtpContext.getConnectedPromise();
-                            }
-                            recvTx.setSenderStream(stream);
-                        }
-                        
-                    }
-                }
+                console.log(`client subscribed: user ${receiver.userId} | direction: ${receiver.peer.selfDirection}`);
+                
             }
         })
 

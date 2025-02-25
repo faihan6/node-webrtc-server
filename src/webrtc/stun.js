@@ -16,6 +16,11 @@ class ICEContext{
     onPacketCB = null;
     remote = null;
 
+    /**
+     * resolves when all ports have started to listen
+     */
+    #listeningPromise = null;
+
     constructor({onPacketReceived}){
 
         this.onPacketCB = onPacketReceived;
@@ -23,15 +28,19 @@ class ICEContext{
         this.udpSocket.bind();
 
         
-        this.udpSocket.on('listening', () => {
-            const address = this.udpSocket.address();
-            console.log(`Peer UDP socket listening on ${address.address}:${address.port}`);
-        });
+        this.#listeningPromise = new Promise((resolve) => {
+            this.udpSocket.on('listening', () => {
+                const address = this.udpSocket.address();
+                console.log(`Peer UDP socket listening on ${address.address}:${address.port}`);
+                resolve();
+            });
+        })
 
         this.udpSocket.on('message', this.handlePacket.bind(this));
     }
 
-    getCandidates(){
+    async getCandidates(){
+        await this.#listeningPromise;
         const address = this.udpSocket.address();
         return [`a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`]
     }
