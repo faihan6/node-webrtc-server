@@ -499,14 +499,35 @@ class RTPContext extends CustomEventTarget{
 
             // TODO: get it from SDP.
             const clockRate = 90000;
-            const timeDeltaInRTPUnits = (performance.now() - this.#outgoingSSRCStats.lastPacketSentWallclockTime) * 1000 * clockRate;
+            const timeDeltaMS = performance.now() - this.#outgoingSSRCStats.baseWallclockTime;
+            const timeDeltaInRTPUnits = Math.round(timeDeltaMS / 1000) * clockRate;
 
-            this.#outgoingSSRCStats.rtpTimestampOffset = this.#outgoingSSRCStats.lastPacketSentRTPTime + timeDeltaInRTPUnits - packetRTPTimestamp;
+            this.#outgoingSSRCStats.rtpTimestampOffset = this.#outgoingSSRCStats.lastPacketSentRTPTime - packetRTPTimestamp + timeDeltaInRTPUnits;
             this.#outgoingSSRCStats.sequenceNumberOffset = this.#outgoingSSRCStats.lastPacketSentSeqNo + 1 - packetSequenceNo;
 
         }
+
+
+        // perform circular addition (basically mod) and circular subtraction
+        // 65534 - 4 = 65530
+        // 65535 - 4 = 65531
+        // 0 - 4 = 65532
+        // 1 - 4 = 65533
+        // 2 - 4 = 65534
+        // 3 - 4 = 65535
+        // 4 - 4 = 0
+        // 5 - 4 = 1
+        // 6 - 4 = 2
+        // 7 - 4 = 3
         newRTPTimestamp = (packetRTPTimestamp + this.#outgoingSSRCStats.rtpTimestampOffset) % 4294967295;
         newSequenceNo = (packetSequenceNo + this.#outgoingSSRCStats.sequenceNumberOffset) % 65536;
+
+        // negative numbers are not allowed in RTP timestamps
+        newRTPTimestamp = newRTPTimestamp < 0 ? 4294967295 + newRTPTimestamp : newRTPTimestamp;
+
+        // negative numbers are not allowed in sequence numbers
+        newSequenceNo = newSequenceNo < 0 ? 65536 + newSequenceNo : newSequenceNo;
+        
 
         this.#outgoingSSRCStats.packetsSent += 1;
 
