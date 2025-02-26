@@ -276,9 +276,8 @@ class Transceiver extends CustomEventTarget{
 
     requestKeyFrame(){
         let packet = RTPContext.generatePLI(0);
-        packet = this.#rtpContext.processFeedbackToClient(packet);
-        console.log('Sending PLI to client', packet);
-        this.#sendPacketToClient(packet);
+        console.log('requesting PLI from receiver stream', packet);
+        this.#receiverStream.feedback(packet);
 
     }
     
