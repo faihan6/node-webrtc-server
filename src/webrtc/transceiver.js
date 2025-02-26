@@ -49,7 +49,16 @@ class Transceiver extends CustomEventTarget{
     #rtpContext = null;
     srtpContext = null;
 
+    /**
+     * @type {RTPStream}
+     * stream that sends packets to the client
+     */
     #senderStream = null;
+
+    /**
+     * @type {RTPStream}
+     * stream that receives packets from the client
+     */
     #receiverStream = null;
 
     #handleRTPFromSenderStream = (packet, packetInfo) => this.#handleRTPToClient(packet, packetInfo)
@@ -263,6 +272,14 @@ class Transceiver extends CustomEventTarget{
         const ssrcAfter = packet.readUInt32BE(8);
         console.log('SSRC in RTCP packet', ssrc, 'SSRC after processing', ssrcAfter);
         this.#sendPacketToClient(packet);
+    }
+
+    requestKeyFrame(){
+        let packet = RTPContext.generatePLI(0);
+        packet = this.#rtpContext.processFeedbackToClient(packet);
+        console.log('Sending PLI to client', packet);
+        this.#sendPacketToClient(packet);
+
     }
     
 }

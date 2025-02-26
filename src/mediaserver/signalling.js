@@ -44,6 +44,9 @@ function initializeSignalling(){
                 const videoStream = sender.peer.transceivers[1].getReceiverStream();
                 receiver.peer.transceivers[videoMid].setSenderStream(videoStream);
 
+                sender.peer.transceivers[1].requestKeyFrame();
+
+
                 console.log(`client subscribed: user ${receiver.userId} | direction: ${receiver.peer.selfDirection}`);
                 
             }

@@ -456,22 +456,24 @@ class RTPContext extends CustomEventTarget{
 
     processFeedbackToClient(packet){
 
-        // change ssrc to outgoingSSRCStats.lastOriginalSSRC
-
-        let targetSSRC;
-        let maxTimestamp = Number.MIN_VALUE;
-        for(const ssrc of Object.keys(this.#ssrcStats)){
-            const arrivalTimestamp = this.#ssrcStats[ssrc].lastArrivalWallclockTime;
-            console.log(`ssrc ${ssrc} last arrived at ${arrivalTimestamp}`)
-            if(arrivalTimestamp > maxTimestamp){
-                maxTimestamp = arrivalTimestamp;
-                targetSSRC = ssrc
-            }
-        }
-
+        const targetSSRC = this.#getLastReceivedSSRC();
         console.log('rewriting RTCP SSRC to', targetSSRC)
         packet.writeUInt32BE(targetSSRC, 8);
         return packet;
+    }
+
+    #getLastReceivedSSRC(){
+        let lastReceivedSSRC;
+        let maxTimestamp = Number.MIN_VALUE;
+        for(const ssrc of Object.keys(this.#ssrcStats)){
+            const arrivalTimestamp = this.#ssrcStats[ssrc].lastArrivalWallclockTime;
+            if(arrivalTimestamp > maxTimestamp){
+                maxTimestamp = arrivalTimestamp;
+                lastReceivedSSRC = ssrc
+            }
+        }
+
+        return lastReceivedSSRC;
     }
 
     processRTPToClient(rtpPacket){
@@ -624,6 +626,17 @@ class RTPContext extends CustomEventTarget{
             extensionsBufferLength,
             extensions
         }
+    }
+
+    static generatePLI(ssrc){
+        const buffer = Buffer.alloc(12);
+        buffer[0] = 2 << 6 | 0 << 5 | 1;
+        buffer[1] = 206;
+        buffer.writeUInt16BE(2, 2);
+        buffer.writeUInt32BE(1, 4);
+        buffer.writeUInt32BE(ssrc, 8);
+
+        return buffer;
     }
 
 }
