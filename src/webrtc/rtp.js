@@ -33,10 +33,12 @@ class RTPContext extends CustomEventTarget{
     };
 
     #outgoingSSRC = null;
+    #clockRate = null;
 
-    constructor(outgoingSSRC){
+    constructor({outgoingSSRC, clockRate}){
         super();
         this.#outgoingSSRC = outgoingSSRC;
+        this.#clockRate = clockRate;
     }
 
     #validateRTPHeader(rtpPacket){
@@ -497,12 +499,13 @@ class RTPContext extends CustomEventTarget{
             //console.log('packet is from same Stream', 'SSRC:', packetSSRC);
         }
         else{
-            console.log('packet is from new Stream', 'SSRC changed from', lastSSRC, 'to', packetSSRC);
+            
 
-            // TODO: get it from SDP.
-            const clockRate = 90000;
-            const timeDeltaMS = performance.now() - this.#outgoingSSRCStats.baseWallclockTime;
-            const timeDeltaInRTPUnits = Math.round(timeDeltaMS / 1000) * clockRate;
+            const clockRate = this.#clockRate;
+            const timeDeltaMS = performance.now() - this.#outgoingSSRCStats.lastPacketSentWallclockTime;
+            const timeDeltaInRTPUnits = Math.round((timeDeltaMS / 1000) * clockRate);
+
+            console.log(`Packet is from new Stream | Last packet ssrc: ${lastSSRC} | this packet ssrc: ${packetSSRC} | Time Delta: ${timeDeltaMS}ms | Time Delta in RTP units: ${timeDeltaInRTPUnits}`);
 
             this.#outgoingSSRCStats.rtpTimestampOffset = this.#outgoingSSRCStats.lastPacketSentRTPTime - packetRTPTimestamp + timeDeltaInRTPUnits;
             this.#outgoingSSRCStats.sequenceNumberOffset = this.#outgoingSSRCStats.lastPacketSentSeqNo + 1 - packetSequenceNo;

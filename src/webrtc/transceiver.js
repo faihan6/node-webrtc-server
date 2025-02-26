@@ -76,7 +76,11 @@ class Transceiver extends CustomEventTarget{
         this.srtpContext = srtpContext;
 
         this.outgoingSSRC = 100 + Number(mid);
-        this.#rtpContext = new RTPContext(this.outgoingSSRC);
+        this.#rtpContext = new RTPContext({
+            outgoingSSRC: this.outgoingSSRC,
+            // TODO: get clockRate from SDP
+            clockRate: mediaType == 'audio' ? 48000 : 90000,
+        });
 
         this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? 
             new RTPStream((...data) => this.#handleRTCPToClient(...data)) : 
@@ -174,15 +178,15 @@ class Transceiver extends CustomEventTarget{
 
         switch (packetType) {
             case 201:
-                console.log("got Receiver Report (RR)");
-                break;
+                //console.log("got Receiver Report (RR), not forwarding it to sender!");
+                return;
             case 205:
                 if (fmt === 1) {
                     console.log("got NACK (Negative Acknowledgment)");
                 } else if (fmt === 15) {
                     console.log("got TWCC (Transport-Wide Congestion Control)");
                 } else {
-                    console.log("git Unknown RTPFB packet");
+                    console.log("got Unknown RTPFB packet");
                 }
                 break;
             case 206:
