@@ -1,9 +1,9 @@
 
 const { ICEContext } = require('./stun');
 const { DTLSContext, getFingerprintOfCertificate } = require('./dtls')
-const { RTPContext } = require('./rtp');
+const { RTPHelpers } = require('./rtp');
 const { SRTPContext } = require('./srtp');
-const { Transceiver } = require('./transceiver');
+const { Transceiver, TxController } = require('./transceiver');
 const { CustomEventTarget } = require('../helpers/common_helper');
 
 const supportedCodecs = {
@@ -42,6 +42,7 @@ class PeerContext extends CustomEventTarget{
 
 
     transceivers = {};
+    #txControllers = {};
 
     #isUsingEncryption = true;
 
@@ -217,6 +218,7 @@ class PeerContext extends CustomEventTarget{
 
             console.log(this.#peerId, `mid: ${mid}, mediaType: ${mediaType}, remoteDirection: ${remoteDirection}, selfDirection: ${selfDirection}, payloadTypes:`, payloadTypes, 'extensions:', extensions);
 
+            const txController = new TxController();
             const tx = new Transceiver({
                 mid, mediaType, 
                 direction: selfDirection, 
@@ -224,9 +226,11 @@ class PeerContext extends CustomEventTarget{
                 extensions,
                 iceContext: this.iceContext,
                 dtlsContext: this.#dtlsContext,
-                srtpContext: this.#srtpContext
+                srtpContext: this.#srtpContext,
+                controller: txController
             });
             this.transceivers[mid] = tx;
+            this.#txControllers[mid] = txController;
 
             // 8. add m-blocks to answer
             // 8.1 replace remote direction with self direction
@@ -345,24 +349,9 @@ class PeerContext extends CustomEventTarget{
         }
         //console.log(this.#peerId, 'ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType);
         
-        const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
+        const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
         const {mid, source} = this.#identifyMIDOfPacket(packet, ssrc, extensionsInfo);
-        const tx = this.transceivers[mid];
-        if(tx){
-            if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-                // RTP-i
-                tx.handleRTPFromClient(packet);
-            }
-            else if(rtcpPacketType == 200){
-                // FB-i
-                tx.handleSenderReportFromClient(packet);
-            }
-            else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
-                // FB-o
-                tx.handleFeedbackForProducerFromClient(packet);
-            }
-        }
-
+        this.#txControllers[mid]?.write(packet)
     }
 
     #identifyMIDOfPacket(packet, ssrc, extensionsInfo){

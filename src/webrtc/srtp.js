@@ -34,7 +34,7 @@ const PROFILE_PARAMS = {
 
 /**
  * This class takes care of encrypting and decrypting SRTP packets.
- * Processing is taken care by the super (RTPContext) class.
+ * Processing is outside the scope of this class.
  * Actual writing on the wire and actual listening from the wire are outside the scope of this class.
  */
 class SRTPContext extends CustomEventTarget{

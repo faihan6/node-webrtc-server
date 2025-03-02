@@ -1,11 +1,7 @@
 
 const {ntpToTimeMs, setUInt24, CustomEventTarget} = require('../helpers/common_helper');
 
-/**
- * This class takes care of processing RTP packets.
- * Actual writing on the wire and actual listening from the wire are outside the scope of this class.
- */
-class RTPContext extends CustomEventTarget{
+class RTPReceiver extends CustomEventTarget{
 
     static #MAX_DROPOUT = 3000;
     static #MAX_MISORDER = 100;
@@ -13,32 +9,9 @@ class RTPContext extends CustomEventTarget{
     static #RTP_SEQ_MOD = 1 << 16 
 
     #ssrcStats = {};
-    #outgoingSSRCStats = {
-        packetsSent: 0,
-        payloadBytesSent: 0,
-        baseWallclockTime: performance.now(),
-        baseRTPTimestamp: 0,
 
-        // random no between 0 and 2^32 - 1
-        lastOriginalSSRC: null,
-        lastPacketSentWallclockTime: null,
-        lastPacketSentRTPTime: null,
-        lastPacketSentSeqNo: null,
-
-        initialRTPtimestamp: Math.floor(Math.random() * 4294967295),
-        initialSequenceNumber: Math.floor(Math.random() * 65535),
-        rtpTimestampOffset : null,
-        sequenceNumberOffset: null,
-
-    };
-
-    #outgoingSSRC = null;
-    #clockRate = null;
-
-    constructor({outgoingSSRC, clockRate}){
+    constructor(){
         super();
-        this.#outgoingSSRC = outgoingSSRC;
-        this.#clockRate = clockRate;
     }
 
     #validateRTPHeader(rtpPacket){
@@ -62,7 +35,7 @@ class RTPContext extends CustomEventTarget{
 
         this.#ssrcStats[ssrc].baseSeqNo = currentSeqNo;
         this.#ssrcStats[ssrc].maxSeqNo = currentSeqNo;
-        this.#ssrcStats[ssrc].lastBadSeqNo = RTPContext.#RTP_SEQ_MOD + 1;
+        this.#ssrcStats[ssrc].lastBadSeqNo = RTPReceiver.#RTP_SEQ_MOD + 1;
         this.#ssrcStats[ssrc].cycles = 0;
         this.#ssrcStats[ssrc].packetsReceived = 0;
 
@@ -98,25 +71,25 @@ class RTPContext extends CustomEventTarget{
             else{
 
                 // reset probation, but also consider current packet starting a new sequence. That's why the -1;
-                ssrcStats.probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL - 1;
+                ssrcStats.probationPacketsRemaining = RTPReceiver.#MIN_SEQUENTIAL - 1;
                 ssrcStats.maxSeqNo = currentSeqNo;
             }
             return false;
         }
-        else if(seqNoDelta < RTPContext.#MAX_DROPOUT){
+        else if(seqNoDelta < RTPReceiver.#MAX_DROPOUT){
             if(currentSeqNo < ssrcStats.maxSeqNo){
-                ssrcStats.cycles += RTPContext.#RTP_SEQ_MOD;
+                ssrcStats.cycles += RTPReceiver.#RTP_SEQ_MOD;
             }
             if(currentSeqNo > ssrcStats.maxSeqNo){
                 ssrcStats.maxSeqNo = currentSeqNo;
             }
         }
-        else if(seqNoDelta <= RTPContext.#RTP_SEQ_MOD - RTPContext.#MAX_MISORDER){
+        else if(seqNoDelta <= RTPReceiver.#RTP_SEQ_MOD - RTPReceiver.#MAX_MISORDER){
             if(currentSeqNo == ssrcStats.lastBadSeqNo){
                 this.#initSequenceNo(ssrc, currentSeqNo);
             }
             else{
-                ssrcStats.lastBadSeqNo = (currentSeqNo + 1) & (RTPContext.#RTP_SEQ_MOD - 1);
+                ssrcStats.lastBadSeqNo = (currentSeqNo + 1) & (RTPReceiver.#RTP_SEQ_MOD - 1);
                 return false;
             }
         }
@@ -195,7 +168,6 @@ class RTPContext extends CustomEventTarget{
     }
 
     /**
-     * 
      * @param {Array} sequenceNumbers - Array of sequence numbers that are missing. Must be in ascending order.
      */
     #generateNack(ssrc, sequenceNumbers){
@@ -373,7 +345,7 @@ class RTPContext extends CustomEventTarget{
         if(!this.#ssrcStats[ssrc] || !this.#ssrcStats[ssrc].baseSeqNo){
             console.log('First packet for SSRC:', ssrc);
             this.#initSequenceNo(ssrc, seqNo);
-            this.#ssrcStats[ssrc].probationPacketsRemaining = RTPContext.#MIN_SEQUENTIAL
+            this.#ssrcStats[ssrc].probationPacketsRemaining = RTPReceiver.#MIN_SEQUENTIAL
 
             this.#ssrcStats[ssrc].clockRate = 90000;
         }
@@ -413,7 +385,7 @@ class RTPContext extends CustomEventTarget{
 
     }
 
-    processFeedbackFromClient(rtcpPacket){
+    processSRFromClient(rtcpPacket){
 
         //console.log('Feedback from client', rtcpPacket)
         const padding = (rtcpPacket[0] >> 5) & 0b1;
@@ -422,38 +394,35 @@ class RTPContext extends CustomEventTarget{
         const packetType = rtcpPacket[1];
         //console.log('fb from client', packetType)
 
-        if(packetType == 200){
-            
-            const ssrc = rtcpPacket.readUInt32BE(4);
+        const ssrc = rtcpPacket.readUInt32BE(4);
 
-            const length = rtcpPacket.readUInt16BE(2);
-            const ntpTimestampMSB = rtcpPacket.readUInt32BE(8);
-            const ntpTimestampLSB = rtcpPacket.readUInt32BE(12);
+        const length = rtcpPacket.readUInt16BE(2);
+        const ntpTimestampMSB = rtcpPacket.readUInt32BE(8);
+        const ntpTimestampLSB = rtcpPacket.readUInt32BE(12);
 
-            const rtpTimestamp = rtcpPacket.readUInt32BE(16);
-            const packetCount = rtcpPacket.readUInt32BE(20);
-            const octetCount = rtcpPacket.readUInt32BE(24);
-            //console.log(`NTP: ${(new Date(ntpToTimeMs(ntpTimestampMSB, ntpTimestampLSB))).toLocaleString()} | RTP TS: ${rtpTimestamp}`);
+        const rtpTimestamp = rtcpPacket.readUInt32BE(16);
+        const packetCount = rtcpPacket.readUInt32BE(20);
+        const octetCount = rtcpPacket.readUInt32BE(24);
+        //console.log(`NTP: ${(new Date(ntpToTimeMs(ntpTimestampMSB, ntpTimestampLSB))).toLocaleString()} | RTP TS: ${rtpTimestamp}`);
 
-            if(!this.#ssrcStats[ssrc]){
-                console.log('First RTCP packet for SSRC:', ssrc);
-                this.#ssrcStats[ssrc] = {}
-            }
-            
-            this.#ssrcStats[ssrc].lastSR = {
-                timestamp: performance.now(),
-                ntpTimestampMSB,
-                ntpTimestampLSB,
-                rtpTimestamp,
-                packetCount,
-                octetCount,
-            }
-
-            const receiverReport = this.#generateReceiverReport(ssrc);
-
-            this.dispatchEvent('send_fb_i_to_client', receiverReport);
-
+        if(!this.#ssrcStats[ssrc]){
+            console.log('First RTCP packet for SSRC:', ssrc);
+            this.#ssrcStats[ssrc] = {}
         }
+        
+        this.#ssrcStats[ssrc].lastSR = {
+            timestamp: performance.now(),
+            ntpTimestampMSB,
+            ntpTimestampLSB,
+            rtpTimestamp,
+            packetCount,
+            octetCount,
+        }
+
+        const receiverReport = this.#generateReceiverReport(ssrc);
+
+        this.dispatchEvent('send_fb_i_to_client', receiverReport);
+   
     }
 
     processFeedbackToClient(packet){
@@ -476,6 +445,37 @@ class RTPContext extends CustomEventTarget{
         }
 
         return lastReceivedSSRC;
+    }
+
+}
+
+class RTPSender extends CustomEventTarget{
+    #outgoingSSRCStats = {
+        packetsSent: 0,
+        payloadBytesSent: 0,
+        baseWallclockTime: performance.now(),
+        baseRTPTimestamp: 0,
+
+        // random no between 0 and 2^32 - 1
+        lastOriginalSSRC: null,
+        lastPacketSentWallclockTime: null,
+        lastPacketSentRTPTime: null,
+        lastPacketSentSeqNo: null,
+
+        initialRTPtimestamp: Math.floor(Math.random() * 4294967295),
+        initialSequenceNumber: Math.floor(Math.random() * 65535),
+        rtpTimestampOffset : null,
+        sequenceNumberOffset: null,
+
+    };
+
+    #outgoingSSRC = null;
+    #clockRate = null;
+
+    constructor({outgoingSSRC, clockRate}){
+        super();
+        this.#outgoingSSRC = outgoingSSRC;
+        this.#clockRate = clockRate;
     }
 
     processRTPToClient(rtpPacket){
@@ -536,7 +536,7 @@ class RTPContext extends CustomEventTarget{
 
         this.#outgoingSSRCStats.packetsSent += 1;
 
-        const extensionInfo = RTPContext.parseHeaderExtensions(rtpPacket);
+        const extensionInfo = RTPHelpers.parseHeaderExtensions(rtpPacket);
         this.#outgoingSSRCStats.payloadBytesSent += rtpPacket.length - 12 - extensionInfo.extensionsBufferLength;
 
         // TODO: update sequence number, RTP timestamp and SSRC in the packet
@@ -552,7 +552,7 @@ class RTPContext extends CustomEventTarget{
         }
 
         // TODO: trigger Sender Report (asynchronously) if required
-        // triggerSR();
+        // this.#triggerSR();
 
         // TODO: update lastKnown values
         this.#outgoingSSRCStats.lastOriginalSSRC = packetSSRC;
@@ -564,6 +564,15 @@ class RTPContext extends CustomEventTarget{
     
     }
 
+    async #triggerSR(){
+
+    }
+
+
+
+}
+
+class RTPHelpers{
     /**
      * 
      * @typedef {Object} HeaderExtensionsInfo
@@ -641,12 +650,11 @@ class RTPContext extends CustomEventTarget{
 
         return buffer;
     }
-
 }
 
 
         
 
 module.exports = {
-    RTPContext
+    RTPSender, RTPReceiver, RTPHelpers
 }

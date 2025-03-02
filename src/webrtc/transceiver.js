@@ -1,5 +1,5 @@
 const { CustomEventTarget } = require("../helpers/common_helper");
-const { RTPContext } = require("./rtp");
+const { RTPSender, RTPReceiver, RTPHelpers } = require("./rtp");
 const { RTPStream } = require("./rtp_stream");
 
 /**
@@ -46,7 +46,6 @@ class Transceiver extends CustomEventTarget{
     #iceContext = null;
     #dtlsContext = null;
 
-    #rtpContext = null;
     srtpContext = null;
 
     /**
@@ -61,9 +60,17 @@ class Transceiver extends CustomEventTarget{
      */
     #receiverStream = null;
 
-    #handleRTPFromSenderStream = (packet, packetInfo) => this.#handleRTPToClient(packet, packetInfo)
+    /** @type {RTPSender} */
+    senderCtx = null;
 
-    constructor({mid, direction, mediaType, extensions, payloadTypes, iceContext, dtlsContext, srtpContext}){
+    /** @type {RTPReceiver} */
+    receiverCtx = null;
+
+    #controller = null;
+
+    #handleRTPFromSenderStream = null;
+
+    constructor({mid, direction, mediaType, extensions, payloadTypes, iceContext, dtlsContext, srtpContext, controller}){
         super();
         this.mid = mid;
         this.direction = direction;
@@ -75,22 +82,26 @@ class Transceiver extends CustomEventTarget{
         this.#dtlsContext = dtlsContext;
         this.srtpContext = srtpContext;
 
-        this.outgoingSSRC = 100 + Number(mid);
-        this.#rtpContext = new RTPContext({
-            outgoingSSRC: this.outgoingSSRC,
-            // TODO: get clockRate from SDP
-            clockRate: mediaType == 'audio' ? 48000 : 90000,
-        });
-
-        this.#receiverStream = (direction == 'sendrecv' || direction == 'recvonly') ? 
-            new RTPStream((...data) => this.#handleRTCPToClient(...data)) : 
-            null;
-
         this.#dtlsContext.addEventListener('dtlsParamsReady', params => {
             this.srtpContext.initSRTP(params);
         });
 
-        this.#rtpContext.addEventListener('send_fb_i_to_client', packet => this.#sendPacketToClient(packet));
+        if(direction == 'sendrecv' || direction == 'sendonly'){
+            this.outgoingSSRC = 100 + Number(mid);
+            this.senderCtx = new RTPSender({
+                outgoingSSRC: this.outgoingSSRC,
+                // TODO: get clockRate from SDP
+                clockRate: mediaType == 'audio' ? 48000 : 90000,
+            });
+            this.#handleRTPFromSenderStream = (packet, packetInfo) => this.#handleRTPToClient(packet, packetInfo)
+        }
+        if(direction == 'sendrecv' || direction == 'recvonly'){
+            this.receiverCtx = new RTPReceiver();
+            this.#receiverStream = new RTPStream((...data) => this.#handleRTCPToClient(...data));
+        }
+
+        this.#controller = controller;
+        this.#controller.addEventListener('packet', packet => this.#handlePacketFromClient(packet));
 
         console.log('Transceiver created with mid', mid, 'direction', direction, 'mediaType', mediaType);
     }
@@ -116,7 +127,7 @@ class Transceiver extends CustomEventTarget{
     #sendPacketToClient(packet){
         // encrypt the packet if required
         if(this.srtpContext){
-            const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
+            const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
             packet = this.srtpContext.encryptPacket(packet, extensionsInfo);
         }
         this.#iceContext.sendPacket(packet);
@@ -140,17 +151,34 @@ class Transceiver extends CustomEventTarget{
         return this.#receiverStream;
     }
 
-    handleRTPFromClient(packet){
+    #handlePacketFromClient(packet){
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1];
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            // RTP-i
+            this.#handleRTPFromClient(packet);
+        }
+        else if(rtcpPacketType == 200){
+            // FB-i
+            this.#handleSenderReportFromClient(packet);
+        }
+        else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
+            // FB-o
+            this.#handleFeedbackForProducerFromClient(packet);
+        }
+    }
+
+    #handleRTPFromClient(packet){
 
         const rtpPayloadType = packet[1] & 0b01111111;
 
         if((rtpPayloadType >= 96 && rtpPayloadType <= 127)){
             // RTP-i
             if(this.srtpContext){
-                const extensionsInfo = RTPContext.parseHeaderExtensions(packet);
+                const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
                 packet = this.srtpContext.decryptPacket(packet, extensionsInfo);
             }
-            this.#rtpContext.processRTPFromClient(packet);
+            this.receiverCtx.processRTPFromClient(packet);
         }
 
         const packetInfo = {
@@ -159,51 +187,60 @@ class Transceiver extends CustomEventTarget{
         this.#receiverStream.controller.write(packet, packetInfo);
     }
 
-    handleSenderReportFromClient(packet){
+    #handleSenderReportFromClient(packet){
         if(this.srtpContext){
             packet = this.srtpContext.decryptPacket(packet);
         }
-        this.#rtpContext.processFeedbackFromClient(packet);
-        this.#receiverStream.controller.write(packet);
+        this.receiverCtx.processSRFromClient(packet);
     }
 
-    handleFeedbackForProducerFromClient(packet){
+    #handleFeedbackForProducerFromClient(packet){
         if(this.srtpContext){
             packet = this.srtpContext.decryptPacket(packet);
         }
         
+        if(packet[1] == 201){
+            // Receiver Report! Do not forward to stream
+            // TODO: Collect stats before retuning
+            return;
+        }
+
+        console.log("got", this.#getRTCPPacketTypeStr(packet));
+
+        this.#senderStream.feedback(packet);
+    }
+
+    #getRTCPPacketTypeStr(packet){
         // check if packet is NACK/PLI/FIR/TWCC/RR and print log
         const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
         const packetType = packet[1]; // RTCP Packet Type
 
         switch (packetType) {
             case 201:
-                //console.log("got Receiver Report (RR), not forwarding it to sender!");
+                //return ("got Receiver Report (RR), not forwarding it to sender!");
                 return;
             case 205:
                 if (fmt === 1) {
-                    console.log("got NACK (Negative Acknowledgment)");
+                    return ("NACK (Negative Acknowledgment)");
                 } else if (fmt === 15) {
-                    console.log("got TWCC (Transport-Wide Congestion Control)");
+                    return ("TWCC (Transport-Wide Congestion Control)");
                 } else {
-                    console.log("got Unknown RTPFB packet");
+                    return ("Unknown RTPFB packet");
                 }
                 break;
             case 206:
                 if (fmt === 1) {
-                    console.log("got PLI (Picture Loss Indication)");
+                    return ("PLI (Picture Loss Indication)");
                 } else if (fmt === 4) {
-                    console.log("got FIR (Full Intra Request)");
+                    return ("FIR (Full Intra Request)");
                 } else {
-                    console.log("got Unknown Payload specific FB packet");
+                    return ("Unknown Payload specific FB packet");
                 }
                 break;
             default:
-                console.log("got Unknown RTCP packet type:", packetType);
+                return ("Unknown RTCP packet type:", packetType);
 
         }
-
-        this.#senderStream.feedback(packet);
     }
 
 
@@ -225,11 +262,11 @@ class Transceiver extends CustomEventTarget{
                     2. Change SSRC to the one mapped for this TX (RTPContext)
             */
             packet = this.#fixPayloadType(packet, packetInfo);
-            packet = this.#rtpContext.processRTPToClient(packet);
+            packet = this.senderCtx.processRTPToClient(packet);
         }
         else{
             // Must be RTCP Sender Report. We will generate our own SR. ignore..
-            //packet = this.#rtpContext.processFeedbackToClient(packet);
+            //packet = this.receiver.processFeedbackToClient(packet);
         }
 
         this.#sendPacketToClient(packet);
@@ -242,44 +279,17 @@ class Transceiver extends CustomEventTarget{
 
         //TODO: ideally, you need to debounce/throttle the RTCP packets to be sent to the client
 
-        const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
-        const packetType = packet[1]; // RTCP Packet Type
-
-        switch (packetType) {
-            case 201:
-                console.log("sending Receiver Report (RR)");
-                break;
-            case 205:
-                if (fmt === 1) {
-                    console.log("sending NACK (Negative Acknowledgment)");
-                } else if (fmt === 15) {
-                    console.log("sending TWCC (Transport-Wide Congestion Control)");
-                } else {
-                    console.log("sending Unknown RTPFB packet");
-                }
-                break;
-            case 206:
-                if (fmt === 1) {
-                    console.log("sending PLI (Picture Loss Indication)");
-                } else if (fmt === 4) {
-                    console.log("sending FIR (Full Intra Request)");
-                } else {
-                    console.log("Unknown Payload specific FB packet");
-                }
-                break;
-            default:
-                console.log("Unknown RTCP packet type:", packetType);
-
-        }
+        console.log('sending', this.#getRTCPPacketTypeStr(packet), 'to client');
+       
         const ssrc = packet.readUInt32BE(8)
-        packet = this.#rtpContext.processFeedbackToClient(packet);
+        packet = this.receiverCtx.processFeedbackToClient(packet);
         const ssrcAfter = packet.readUInt32BE(8);
         console.log('SSRC in RTCP packet', ssrc, 'SSRC after processing', ssrcAfter);
         this.#sendPacketToClient(packet);
     }
 
     requestKeyFrame(){
-        let packet = RTPContext.generatePLI(0);
+        let packet = RTPHelpers.generatePLI(0);
         console.log('requesting PLI from receiver stream', packet);
         this.#receiverStream.feedback(packet);
 
@@ -287,6 +297,16 @@ class Transceiver extends CustomEventTarget{
     
 }
 
+class TxController extends CustomEventTarget{
+    constructor(){
+        super()
+    }
+
+    write(packet){
+        this.dispatchEvent('packet', packet);
+    }
+}
+
 module.exports = {
-    Transceiver
+    Transceiver, TxController
 }
