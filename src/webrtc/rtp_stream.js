@@ -15,7 +15,7 @@ class RTPStream extends CustomEventTarget{
     }
 
     #write(...data){
-        this.dispatchEvent('data', ...data);
+        this.dispatchEventWithClonedArgs('data', ...data);
     }
 
     feedback(...data){

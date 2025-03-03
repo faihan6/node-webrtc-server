@@ -1,0 +1,20 @@
+
+#media-options{
+    background-color: bisque;
+    /* height: 200px; */
+    padding: 1%;
+    width: 99%;
+}
+
+#feed-container{
+    background-color: aliceblue;
+    width: 100%;
+    height: 100%;
+}
+
+video {
+    width: 360px;
+    padding: 5px;
+    margin: 5px;
+    border: 1px solid black;
+}

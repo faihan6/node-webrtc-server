@@ -1,0 +1,24 @@
+<html>
+<head>
+    <title>Sample Conference</title>
+    <link rel="stylesheet" type="text/css" href="sample_conference.css">
+    <body>
+        <h1>Sample Conference</h1>
+        <div id="media-options">
+            Choose a media source:
+            <select name="media" id="media-select">
+                <option value="none" selected>None</option>
+                <option value="sample1">Sample 1 (Django Unchained)</option>
+                <option value="sample2">Sample 2 (Inglorious Basterds)</option>
+                <option value="camera">Camera/Mic</option>
+            </select>
+            <button id="start-media">Start</button>
+        </div>
+        <div id="feed-container">
+            <video id="local-feed" autoplay playsinline loop></video>
+        </div>
+
+        
+        <script src="sample_conference.js" type="module"></script>
+    </body>
+</html>

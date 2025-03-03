@@ -35,6 +35,26 @@ class CustomEventTarget{
         }
     }
 
+    dispatchEventWithClonedArgs(name, ...args){
+        if(!this.listeners[name]){
+            return;
+        }
+        for(const listener of this.listeners[name]){
+            const clone = [];
+
+            for(const arg of args){
+                if(arg?.constructor?.name == 'Buffer'){
+                    clone.push(Buffer.from(arg))
+                }
+                else{
+                    clone.push(structuredClone(arg));
+                }
+            }
+
+            listener(...clone);
+        }
+    }
+
     removeEventListener(type, listener){
         if(!this.listeners[type]){
             return;

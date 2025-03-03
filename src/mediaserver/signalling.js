@@ -2,6 +2,10 @@ const WebSocket = require('ws');
 const { UserContext } = require('./user_context');
 
 const users = []
+
+/**
+ * @type {Map<WebSocket, UserContext>}
+ */
 const wsUserMap = new Map();
 
 
@@ -10,11 +14,22 @@ function initializeSignalling(){
 
     server.on('connection', (ws) => {
 
-        console.log(`client connected`);
+        console.log(`new client connected`);
         
         ws.addEventListener('message', async (event) => {
+
+            const reply = (params) => {
+                const response = {
+                    id: message.id,
+                    method: message.method,
+                    params
+                }
+                ws.send(JSON.stringify(response));
+            }
+
             const message = JSON.parse(event.data);
             console.log('Received message', message);
+            
             if(message.method == 'login'){
                 const userId = message.params.userId;
                 const user = new UserContext({ws, userId});
@@ -22,6 +37,19 @@ function initializeSignalling(){
                 wsUserMap.set(ws, user);
 
                 console.log(`client loggedIn: user ${user.userId} | direction: ${user.peer.selfDirection}`);
+
+                reply({
+                    status: 'success',
+                    usersList : users.map(user => user.userId)
+                });
+
+                const broadCastMessage = {
+                    type: 'user-joined',
+                    userId: user.userId
+                }
+                broadcast(broadCastMessage, user);
+
+
             }
 
             if(message.method == 'subscribe'){
@@ -50,11 +78,41 @@ function initializeSignalling(){
                 console.log(`client subscribed: user ${receiver.userId} | direction: ${receiver.peer.selfDirection}`);
                 
             }
+
+            if(message.method == 'sdp-exchange'){
+                const user = wsUserMap.get(ws);
+                const offer = message.params;
+                user.peer.setRemoteDescription(offer);
+                const answerSDP = await user.peer.generateAnswer();
+
+                const response = {
+                    type: 'answer',
+                    sdp: answerSDP
+                }
+                
+                reply(response);
+            }
         })
 
     });
 
     console.log('WebSocket server is running on ws://localhost:8080');
+}
+
+function broadcast(message, self){
+    for(const user of users){
+
+        if(user.userId == self.userId){
+            continue;
+        }
+
+        const msg = {
+            id: Math.random().toString(36).substring(2, 7),
+            method: 'broadcast',
+            params: message
+        }
+        user.ws.send(JSON.stringify(msg));
+    }
 }
 
 module.exports = {
