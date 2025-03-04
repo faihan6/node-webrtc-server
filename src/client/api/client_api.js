@@ -1,16 +1,18 @@
-class ServerContext{
+class ServerContext extends EventTarget{
 
     #ws = null;
-    #userId = Math.random().toString(36).substring(2, 7);
+    userId = Math.random().toString(36).substring(2, 7);
 
     #usersSet = new Set();
 
-    constructor(){}
+    constructor(){
+        super()
+    }
 
     // TODO: implement retries
     async connect(url){
 
-        console.log('Self User ID', this.#userId);
+        console.log('Self User ID', this.userId);
 
         if(!url){
             url = `ws://${window.location.hostname}:8080`;
@@ -18,18 +20,18 @@ class ServerContext{
 
         this.#ws = new WebSocket(url);
         const ws = this.#ws;
+        ws.onmessage = this.#handleMessage.bind(this);
 
         
         return new Promise(res => {
             const onopen = async () => {
                 console.log('Connected to server');
     
-                const params = {userId: this.#userId};
+                const params = {userId: this.userId};
                 const response = await this.#call('login', params, true);
-                console.log('Login response', response);
 
                 response.usersList.forEach(userId => {
-                    if(userId == this.#userId){
+                    if(userId == this.userId){
                         this.#usersSet.add(userId);
                     }
                 });
@@ -64,14 +66,17 @@ class ServerContext{
                 err.data = arguments;
                 reject(err);
             }, timeoutMS);
-            
 
-            this.#ws.onmessage = (e) => {
+            const onmessage = (e) => {
                 const data = JSON.parse(e.data);
                 if(data.id === id){
+                    this.#ws.removeEventListener('message', onmessage);
                     resolve(data.params);
                 }
             }
+            
+
+            this.#ws.addEventListener('message', onmessage)
         });
     }
 
@@ -87,6 +92,23 @@ class ServerContext{
     async subscribe(producerId, audioMid, videoMid){
         const params = {producerId, audioMid, videoMid};
         await this.#call('subscribe', params, false);
+    }
+
+    #handleMessage(message){
+        const data = JSON.parse(message.data);
+        console.log('Received message', data);
+
+        if(data.method == 'broadcast'){
+            const params = data.params;
+            if(params.type == 'user-joined'){
+                this.#usersSet.add(params.userId);
+                this.dispatchEvent(new CustomEvent('user-joined', {detail: params}));
+            }
+            else if(params.type == 'user-left'){
+                this.#usersSet.delete(params.userId);
+                this.dispatchEvent(new CustomEvent('user-left', {detail: params}));
+            }
+        }
     }
 
 

@@ -7,8 +7,51 @@ const feedContainer = document.getElementById('feed-container');
 
 localFeed.volume = 0.01
 
+/**
+ * each slot denotes two MIDs. One for audio and one for video.
+ */
+const subscribeInfo = {
+    0: null, 1: null, 2: null, 3: null, 4: null
+}
+
 const server = new ServerContext();
-await server.connect();
+const response = await server.connect();
+console.log('Login response', response);
+
+for(const userDetails of response.usersList){
+    if(userDetails.userId == server.userId){
+        continue;
+    }
+    if(userDetails.sendingAudio && userDetails.sendingVideo){
+        subscribeToFreeSlot(userDetails.userId);
+    }
+}
+
+function subscribeToFreeSlot(userId){
+    console.log(subscribeInfo)
+    const freeSlot = Object.keys(subscribeInfo).find(key => !subscribeInfo[key]);
+    subscribeInfo[freeSlot] = userId;
+    console.log('Subscribing to free slot', freeSlot, userId);
+    server.subscribe(userId, freeSlot * 2, freeSlot * 2 + 1);
+}
+
+server.addEventListener('user-joined', (event) => {
+    console.log('User joined', event.detail);
+
+    const detail = event.detail.userDetails;
+    if(detail.sendingAudio && detail.sendingVideo){
+        subscribeToFreeSlot(detail.userId);
+    }
+
+    
+})
+
+server.addEventListener('user-left', (event) => {
+    console.log('User left', event);
+    const userId = event.detail.userId;
+    const slot = Object.keys(subscribeInfo).find(key => subscribeInfo[key] == userId);
+    subscribeInfo[slot] = null;
+})
 
 window.server = server;
 

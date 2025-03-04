@@ -1,12 +1,20 @@
 const WebSocket = require('ws');
 const { UserContext } = require('./user_context');
 
+/** @type {UserContext[]} */
 const users = []
 
 /**
  * @type {Map<WebSocket, UserContext>}
  */
-const wsUserMap = new Map();
+const wsUserMap = new WeakMap();
+
+/**
+ * TODO: Read below
+ * 1. Stop sending packets when peer is not connected. (Firefox not connected, no SRTPCtx, still we try to encrypt/send packets).
+ * 2. Clear ws/UserContext from objects once ws closes.
+ * 3. Do not send leave messages for someone for whom joined message wasn't sent
+ */
 
 
 function initializeSignalling(){
@@ -38,17 +46,12 @@ function initializeSignalling(){
 
                 console.log(`client loggedIn: user ${user.userId} | direction: ${user.peer.selfDirection}`);
 
+                const peerStableUsers = users.filter(user => user.peer?.signallingState == 'stable').map(user => user.getDetails())
+
                 reply({
                     status: 'success',
-                    usersList : users.map(user => user.userId)
+                    usersList : peerStableUsers
                 });
-
-                const broadCastMessage = {
-                    type: 'user-joined',
-                    userId: user.userId
-                }
-                broadcast(broadCastMessage, user);
-
 
             }
 
@@ -91,8 +94,29 @@ function initializeSignalling(){
                 }
                 
                 reply(response);
+
+                if(answerSDP){
+                    const broadCastMessage = {
+                        type: 'user-joined',
+                        userDetails: user.getDetails()
+                    }
+                    broadcast(broadCastMessage, user);
+                }
             }
         })
+
+        ws.on('close', () => {
+            const user = wsUserMap.get(ws);
+            console.log(`client disconnected: user ${user.userId}`);
+            wsUserMap.delete(ws);
+            users.splice(users.indexOf(user), 1);
+
+            const broadCastMessage = {
+                type: 'user-left',
+                userId: user.userId
+            }
+            broadcast(broadCastMessage, user);
+        });
 
     });
 

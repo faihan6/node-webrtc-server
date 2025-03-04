@@ -130,7 +130,10 @@ class Transceiver extends CustomEventTarget{
             const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
             packet = this.srtpContext.encryptPacket(packet, extensionsInfo);
         }
-        this.#iceContext.sendPacket(packet);
+        if(packet){
+            this.#iceContext.sendPacket(packet);
+        }
+        
     }
 
     setSenderStream(stream){
@@ -177,6 +180,9 @@ class Transceiver extends CustomEventTarget{
             if(this.srtpContext){
                 const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
                 packet = this.srtpContext.decryptPacket(packet, extensionsInfo);
+                if(!packet){
+                    return;
+                }
             }
             this.receiverCtx.processRTPFromClient(packet);
         }
@@ -190,6 +196,9 @@ class Transceiver extends CustomEventTarget{
     #handleSenderReportFromClient(packet){
         if(this.srtpContext){
             packet = this.srtpContext.decryptPacket(packet);
+            if(!packet){
+                return
+            }
         }
         this.receiverCtx.processSRFromClient(packet);
     }
@@ -197,6 +206,9 @@ class Transceiver extends CustomEventTarget{
     #handleFeedbackForProducerFromClient(packet){
         if(this.srtpContext){
             packet = this.srtpContext.decryptPacket(packet);
+            if(!packet){
+                return
+            }
         }
         
         if(packet[1] == 201){

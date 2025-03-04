@@ -213,18 +213,23 @@ class SRTPContext extends CustomEventTarget{
 
     decryptPacket(packet, extensionsInfo){
 
-        const rtpPayloadType = packet[1] & 0b01111111;
-        const rtcpPacketType = packet[1];
+        try{
+            const rtpPayloadType = packet[1] & 0b01111111;
+            const rtcpPacketType = packet[1];
 
-        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-            return this.decryptSRTP(packet, this.srtpParams.clientKeys, extensionsInfo);
+            if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+                return this.decryptSRTP(packet, this.srtpParams.clientKeys, extensionsInfo);
+            }
+            else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
+                return this.decryptSRTCP(packet, this.srtpParams.clientKeys);
+            }
+            else{
+                console.error('Unknown packet type', 'rtcpPacketType:', rtcpPacketType, 'rtpPayloadType:', rtpPayloadType, packet);
+                //return packet;
+            }
         }
-        else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
-            return this.decryptSRTCP(packet, this.srtpParams.clientKeys);
-        }
-        else{
-            console.error('Unknown packet type', 'rtcpPacketType:', rtcpPacketType, 'rtpPayloadType:', rtpPayloadType, packet);
-            //return packet;
+        catch(err){
+            console.error('Error decrypting packet', err);
         }
     }
 
@@ -366,18 +371,24 @@ class SRTPContext extends CustomEventTarget{
     }
 
     encryptPacket(packet, extensionsInfo){
-        const rtpPayloadType = packet[1] & 0b01111111;
-        const rtcpPacketType = packet[1];
+        try{
+            const rtpPayloadType = packet[1] & 0b01111111;
+            const rtcpPacketType = packet[1];
 
-        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-            return this.encryptRTP(packet, this.srtpParams.serverKeys, extensionsInfo);
+            if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+                return this.encryptRTP(packet, this.srtpParams.serverKeys, extensionsInfo);
+            }
+            else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
+                return this.encryptRTCP(packet, this.srtpParams.serverKeys);
+            }
+            else{
+                console.error('what is this, how to encryt it?', 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType, packet.slice(0, 35))
+            }
         }
-        else if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
-            return this.encryptRTCP(packet, this.srtpParams.serverKeys);
+        catch(err){
+            console.error('Error encrypting packet', err);
         }
-        else{
-            console.error('what is this, how to encryt it?', 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType, packet.slice(0, 35))
-        }
+        
     }
 
     encryptRTP(packet, keys, extensionsInfo){
