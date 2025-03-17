@@ -1,3 +1,11 @@
 certificatePath = "cert.pem"
 keyPath = "key.pem"
+disableWebRTCEncryption = true
 
+
+audioSupportedCodecs = ["opus/48000"]
+videoSupportedCodecs = ["VP8/90000"]
+
+supportedHeaderExtensions = [
+    'urn:ietf:params:rtp-hdrext:sdes:mid'
+]
