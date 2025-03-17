@@ -3,9 +3,9 @@
 
   
 
-This repository contains a WebRTC implementation written entirely in Node.js along with an implementation for a simple SFU server. A Web client API is also provided to allow WebApps to establish connections with the server.
+This repository contains a WebRTC implementation written entirely in JavaScript for Node.js runtime along with an implementation for a simple SFU server. A Web client API is also provided to allow WebApps to establish connections with the server.
 
-**The following functionalities are implemented entirely in Node.js**
+**The following functionalities are implemented entirely in JavaScript for Node.js runtime**
 
 1. ICE/STUN
 2. DTLS
