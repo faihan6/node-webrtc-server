@@ -1,6 +1,6 @@
 certificatePath = "cert.pem"
 keyPath = "key.pem"
-disableWebRTCEncryption = true
+disableWebRTCEncryption = false
 
 
 audioSupportedCodecs = ["opus/48000"]
