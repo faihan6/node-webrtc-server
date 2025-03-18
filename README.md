@@ -127,6 +127,7 @@ Following functionalities are not implemented yet/partially implemented. Contrib
 1. VP8 - handle temporal scalability.
 2. VP9 - handle temporal and spacial scalability.
 3. Support for AV1.
+4. Support Simulcast
 
 **Congestion control**
 
