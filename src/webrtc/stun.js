@@ -8,13 +8,22 @@ const localAddress = os.networkInterfaces().en0.find(e => e.family === 'IPv4').a
 
 class ICEContext{
 
-    udpSocket = dgram.createSocket('udp4');
     selfUfrag = generateRandomString(4);
     selfPwd = generateRandomString(24);
     remoteUfrag = null;
     remotePwd = null;
     onPacketCB = null;
     remote = null;
+
+    localCandidateSockets = {
+        host: dgram.createSocket('udp4'),
+        srflx: dgram.createSocket('udp4'),
+    }
+
+    selectedCandidatePair = {
+        local: null,
+        remote: null
+    }
 
     /**
      * resolves when all ports have started to listen
@@ -25,24 +34,43 @@ class ICEContext{
 
         this.onPacketCB = onPacketReceived;
 
-        this.udpSocket.bind();
+        this.localCandidateSockets.host.bind();
+        this.localCandidateSockets.srflx.bind();
 
         
-        this.#listeningPromise = new Promise((resolve) => {
-            this.udpSocket.on('listening', () => {
-                const address = this.udpSocket.address();
-                console.log(`Peer UDP socket listening on ${address.address}:${address.port}`);
+        const hostListeningPromise = new Promise((resolve) => {
+
+            this.localCandidateSockets.host.on('listening', () => {
+                const address = this.localCandidateSockets.host.address();
+                console.log(`Host candidate UDP socket listening on ${address.address}:${address.port}`);
+                resolve();
+            });
+
+        })
+
+        const srflxListeningPromise = new Promise((resolve) => {
+            this.localCandidateSockets.srflx.on('listening', () => {
+                const address = this.localCandidateSockets.srflx.address();
+                console.log(`srflx candidate UDP socket listening on ${address.address}:${address.port}`);
                 resolve();
             });
         })
 
-        this.udpSocket.on('message', this.handlePacket.bind(this));
+        this.#listeningPromise = Promise.all([hostListeningPromise, srflxListeningPromise]);
+
+        this.localCandidateSockets.host.on('message', (packet, remote) => this.handlePacket(packet, remote, this.localCandidateSockets.host));
+        this.localCandidateSockets.srflx.on('message', (packet, remote) => this.handlePacket(packet, remote, this.localCandidateSockets.srflx));
     }
 
     async getCandidates(){
         await this.#listeningPromise;
-        const address = this.udpSocket.address();
-        return [`a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`]
+        const address = this.localCandidateSockets.host.address();
+        const hostCandidateStr = `a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`
+
+        const srflxAddress = this.localCandidateSockets.srflx.address();
+        const srflxCandidateStr = `a=candidate:121418589 1 udp 2122250224 ${globalThis.serverConfig.publicIP} ${srflxAddress.port} typ srflx raddr ${localAddress} rport ${address.port}\r\n`
+
+        return [hostCandidateStr, srflxCandidateStr];
     }
 
     setRemoteUfragAndPassword(remoteUfrag, remotePwd){
@@ -52,23 +80,22 @@ class ICEContext{
 
     sendPacket(packet, remote){
         if(!remote){
-
-            if(!this.remote){
-                console.log("Remote not set. Ignoring packet", packet);
-                return
-            }
-
-            remote = this.remote;
+            remote = this.selectedCandidatePair.remote;
         }
-        this.udpSocket.send(packet, remote.port, remote.address);
+        if(!remote){
+            console.log("Remote not set. Ignoring packet", packet);
+            return
+        }
+        // this.udpSocket.send(packet, remote.port, remote.address);
+
+        this.selectedCandidatePair.local.send(packet, remote.port, remote.address);
     }
 
     handlePacket(packet, remote){
         // if is a STUN packet
         if(packet.at(0) == 0 && packet.at(1) == 1){
-            const bindingResponse = this.handleSTUNBindingRequest(packet, remote.address, remote.port, remote.family, this.selfPwd);
+            const bindingResponse = this.handleSTUNBindingRequest(packet, remote.address, remote.port, remote.family, this.selfPwd, localSocket);
             this.sendPacket(bindingResponse, remote);
-            this.remote = remote;
         }
         // should be DTLS or SRTP. Pass it to the appropriate handler
         else{
@@ -76,7 +103,7 @@ class ICEContext{
         }
     }
 
-    handleSTUNBindingRequest(packet, srcaddr, srcport, ipFamily, selfPwd){
+    handleSTUNBindingRequest(packet, srcaddr, srcport, ipFamily, selfPwd, localSocket){
         //console.log("STUN BINDING REQUEST", packet.length);
         const view = new DataView(packet.buffer);
     
@@ -92,7 +119,7 @@ class ICEContext{
     
         let attributeCount = 0;
         let offset = 20;
-        while(false){
+        while(true){
     
             let attrType = view.getUint16(offset);
             let attrLength = view.getUint16(offset + 2);
@@ -148,6 +175,11 @@ class ICEContext{
             }
             else if(attrType == 9){
                 //console.log("ERROR CODE");
+            }
+            else if(attrType == 0x25){
+                //console.log(`USE CANDIDATE attribute! candidate pair selected: ${localSocket.address}:${localSocket.port} -> ${srcaddr}:${srcport}`);
+                this.selectedCandidatePair.local = localSocket;
+                this.selectedCandidatePair.remote = {address: srcaddr, port: srcport};
             }
             else{
                 //console.log("UNKNOWN ATTRIBUTE", attrType);
