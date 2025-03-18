@@ -35,7 +35,7 @@ class PeerContext extends CustomEventTarget{
      * Ideally, one ICEContext, DTLSContext and SRTPContext per BUNDLE group.
      */
     iceContext = new ICEContext({onPacketReceived: this.#allocatePacketToAppropriateMethod.bind(this)});
-    #dtlsContext = new DTLSContext();
+    #dtlsContext = null;
     #srtpContext = null;
 
     rtpStreamSubscriberCallbacks = {};
@@ -108,6 +108,9 @@ class PeerContext extends CustomEventTarget{
         const certificateFPInOffer = offer.sdp.match(/a=fingerprint:(.*)/);
         if(certificateFPInOffer){
 
+            this.#dtlsContext = new DTLSContext();
+            this.#srtpContext = new SRTPContext();
+
             // 5. Get the certificate fingerprint from the offer
             const remoteCertificateFingerprint = certificateFPInOffer[1];
             this.#dtlsContext.setRemoteFingerprint(remoteCertificateFingerprint);
@@ -121,7 +124,6 @@ class PeerContext extends CustomEventTarget{
             // 6.1 add setup attribute
             sessionAttributesBlock += 'a=setup:passive\r\n';
 
-            this.#srtpContext = new SRTPContext();
         }
         else{
             if(globalThis.serverConfig.disableWebRTCEncryption){
@@ -320,7 +322,7 @@ class PeerContext extends CustomEventTarget{
 
     #allocatePacketToAppropriateMethod(packet, remote){
         
-        if(packet.at(0) == 0x16){
+        if(packet.at(0) == 0x16 && this.#dtlsContext){
             // DTLS
             const response = this.#dtlsContext.handleDTLS(packet);
             this.iceContext.sendPacket(response, remote);

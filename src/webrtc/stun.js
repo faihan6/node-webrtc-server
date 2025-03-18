@@ -101,7 +101,7 @@ class ICEContext{
         this.selectedCandidatePair.local.send(packet, remote.port, remote.address);
     }
 
-    handlePacket(packet, remote){
+    handlePacket(packet, remote, localSocket){
         // if is a STUN packet
         if(packet.at(0) == 0 && packet.at(1) == 1){
             const bindingResponse = this.handleSTUNBindingRequest(packet, remote.address, remote.port, remote.family, this.selfPwd, localSocket);

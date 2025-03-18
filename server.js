@@ -18,7 +18,9 @@ const { monitorEventLoopDelay } = require('perf_hooks');
 
 console.log('Process running on PID', pid)
 
-initializeDTLS(config.certificatePath, config.keyPath);
+if(!globalThis.serverConfig.disableWebRTCEncryption){
+    initializeDTLS(config.certificatePath, config.keyPath);
+}
 initializeSignalling()
 
 const histogram = monitorEventLoopDelay();

@@ -82,7 +82,7 @@ class Transceiver extends CustomEventTarget{
         this.#dtlsContext = dtlsContext;
         this.srtpContext = srtpContext;
 
-        this.#dtlsContext.addEventListener('dtlsParamsReady', params => {
+        this.#dtlsContext?.addEventListener('dtlsParamsReady', params => {
             this.srtpContext.initSRTP(params);
         });
 
