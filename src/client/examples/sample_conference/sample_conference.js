@@ -72,7 +72,7 @@ if(mediaSource == 'camera'){
     await localFeed.play();
 }
 else if(mediaSource.includes('sample')){
-    const path = mediaSource == 'sample1' ? 'tmp_html/Django Unchained Beer Scene_1.mp4' : 'tmp_html/Inglourious Basterds  Christoph Waltzs Iconic Opening Scene Extended Preview UHD_1080p.mp4';
+    const path = mediaSource == 'sample1' ? 'tmp_html/Django Unchained Beer Scene_1.mp4' : 'tmp_html/IngloriousBasterdsCut.mp4';
     localFeed.src = `${location.origin}/${path}`;
     await localFeed.play();
     const stream = localFeed.captureStream();
