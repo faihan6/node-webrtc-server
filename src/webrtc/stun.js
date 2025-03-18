@@ -4,7 +4,7 @@ const dgram = require('node:dgram');
 const { calculateSHA1, calculateCRC32, generateRandomString } = require('../helpers/crypto_helper.js');
 
 
-const localAddress = os.networkInterfaces().en0.find(e => e.family === 'IPv4').address;
+const localAddress = os.networkInterfaces().en0?.find(e => e.family === 'IPv4').address;
 
 class ICEContext{
 
@@ -37,16 +37,22 @@ class ICEContext{
         this.localCandidateSockets.host.bind();
         this.localCandidateSockets.srflx.bind();
 
+
+        const listenPromises = []
         
-        const hostListeningPromise = new Promise((resolve) => {
+        if(localAddress){
+            const hostListeningPromise = new Promise((resolve) => {
 
-            this.localCandidateSockets.host.on('listening', () => {
-                const address = this.localCandidateSockets.host.address();
-                console.log(`Host candidate UDP socket listening on ${address.address}:${address.port}`);
-                resolve();
-            });
-
-        })
+                this.localCandidateSockets.host.on('listening', () => {
+                    const address = this.localCandidateSockets.host.address();
+                    console.log(`Host candidate UDP socket listening on ${address.address}:${address.port}`);
+                    resolve();
+                });
+    
+            })
+            listenPromises.push(hostListeningPromise);
+            this.localCandidateSockets.host.on('message', (packet, remote) => this.handlePacket(packet, remote, this.localCandidateSockets.host));
+        }
 
         const srflxListeningPromise = new Promise((resolve) => {
             this.localCandidateSockets.srflx.on('listening', () => {
@@ -55,22 +61,26 @@ class ICEContext{
                 resolve();
             });
         })
-
-        this.#listeningPromise = Promise.all([hostListeningPromise, srflxListeningPromise]);
-
-        this.localCandidateSockets.host.on('message', (packet, remote) => this.handlePacket(packet, remote, this.localCandidateSockets.host));
+        listenPromises.push(srflxListeningPromise);
         this.localCandidateSockets.srflx.on('message', (packet, remote) => this.handlePacket(packet, remote, this.localCandidateSockets.srflx));
+
+        this.#listeningPromise = Promise.all(listenPromises);
     }
 
     async getCandidates(){
         await this.#listeningPromise;
-        const address = this.localCandidateSockets.host.address();
-        const hostCandidateStr = `a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`
+
+        const candidateStrings = []
+
+        if(localAddress){
+            const address = this.localCandidateSockets.host.address();
+            candidateStrings.push(`a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`);
+        } 
 
         const srflxAddress = this.localCandidateSockets.srflx.address();
-        const srflxCandidateStr = `a=candidate:121418589 1 udp 2122250224 ${globalThis.serverConfig.publicIP} ${srflxAddress.port} typ srflx raddr ${localAddress} rport ${address.port}\r\n`
+        candidateStrings.push(`a=candidate:121418589 1 udp 2122250224 ${globalThis.serverConfig.publicIP} ${srflxAddress.port} typ srflx\r\n`);
 
-        return [hostCandidateStr, srflxCandidateStr];
+        return candidateStrings;
     }
 
     setRemoteUfragAndPassword(remoteUfrag, remotePwd){
