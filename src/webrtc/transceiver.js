@@ -97,7 +97,14 @@ class Transceiver extends CustomEventTarget{
         }
         if(direction == 'sendrecv' || direction == 'recvonly'){
             this.receiverCtx = new RTPReceiver();
+
+            /**
+             * feedbacks for the client can come from two places.
+             *      One is from the consumer (PLI/FIR) - comes from the RTPStream's feedback() method
+             *      Other is from the RTPReceiver (NACK/Receiver report) - comes from the RTPReceiver's send_fb_i_to_client event
+             */
             this.#receiverStream = new RTPStream((...data) => this.#handleRTCPToClient(...data));
+            this.receiverCtx.addEventListener('send_fb_i_to_client', (...data) => this.#handleRTCPToClient(...data));
         }
 
         this.#controller = controller;
@@ -230,7 +237,7 @@ class Transceiver extends CustomEventTarget{
         switch (packetType) {
             case 201:
                 //return ("got Receiver Report (RR), not forwarding it to sender!");
-                return;
+                return "Receiver report(RR)";
             case 205:
                 if (fmt === 1) {
                     return ("NACK (Negative Acknowledgment)");
@@ -239,7 +246,6 @@ class Transceiver extends CustomEventTarget{
                 } else {
                     return ("Unknown RTPFB packet");
                 }
-                break;
             case 206:
                 if (fmt === 1) {
                     return ("PLI (Picture Loss Indication)");
@@ -248,9 +254,8 @@ class Transceiver extends CustomEventTarget{
                 } else {
                     return ("Unknown Payload specific FB packet");
                 }
-                break;
             default:
-                return ("Unknown RTCP packet type:", packetType);
+                return `Unknown RTCP packet type: ${packetType}, fmt: ${fmt}, packet: ${packet?.buffer?.toString()}`;
 
         }
     }

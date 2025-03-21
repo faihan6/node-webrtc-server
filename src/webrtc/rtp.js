@@ -149,9 +149,11 @@ class RTPReceiver extends CustomEventTarget{
                     }
 
                     if(seqNosToSendNack.length > 0){
-                        const nackBuffer = this.#generateNack(ssrc, seqNosToSendNack);
+                        const nackBuffers = this.#generateNacks(ssrc, seqNosToSendNack);
+                        for(const nackBuffer of nackBuffers){
                         if(nackBuffer){
                             this.dispatchEvent('send_fb_i_to_client', nackBuffer)
+                            }
                         }
 
                     }
@@ -170,8 +172,9 @@ class RTPReceiver extends CustomEventTarget{
     /**
      * @param {Array} sequenceNumbers - Array of sequence numbers that are missing. Must be in ascending order.
      */
-    #generateNack(ssrc, sequenceNumbers){
+    #generateNacks(ssrc, sequenceNumbers){
 
+        const result = []
         if(sequenceNumbers[sequenceNumbers.length - 1] - sequenceNumbers[0] < 16){
             const buffer = Buffer.alloc(16);
 
@@ -203,14 +206,45 @@ class RTPReceiver extends CustomEventTarget{
             }
 
             buffer.writeUInt16BE(blp.readUInt16BE(0), 14);
-            console.log(performance.now(), 'ssrc', ssrc, 'Sending NACK for:', sequenceNumbers, sequenceNumbers[0], blp.readUInt8(0).toString(2).padStart(8, '0'), blp.readUInt8(1).toString(2).padStart(8, '0'));
+            //console.log(performance.now(), 'ssrc', ssrc, 'Sending NACK for:', sequenceNumbers, sequenceNumbers[0], blp.readUInt8(0).toString(2).padStart(8, '0'), blp.readUInt8(1).toString(2).padStart(8, '0'));
 
-            return buffer
+            result.push(buffer);
         }
         else{
             // multiple NACKs required
-            console.log('Multiple NACKs required');
+
+            // group sequence numbers
+            const nackGroups = [];
+            let currentGroup = [];
+
+            let base = sequenceNumbers[0];
+            currentGroup.push(base);
+
+            for(let i = 1; i < sequenceNumbers.length; i++){
+                if(sequenceNumbers[i] - base < 16){
+                    currentGroup.push(sequenceNumbers[i]);
+                }
+                else{
+                    nackGroups.push(currentGroup);
+                    currentGroup = [sequenceNumbers[i]];
+                    base = sequenceNumbers[i];
+                }
+            }
+            nackGroups.push(currentGroup);
+
+            //console.log('Multiple NACKs required! NACK groups:', nackGroups);
+
+            for(const group of nackGroups){
+                const nacks = this.#generateNacks(ssrc, group)
+                result.push(...nacks);
         }
+
+            
+                
+        }
+
+        //console.log('NACKs:', result);
+        return result;
         
     }
 
