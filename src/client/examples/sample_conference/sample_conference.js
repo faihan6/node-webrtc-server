@@ -140,6 +140,59 @@ for(const stream of Object.values(streams)){
     video.play();
 }
 
+// calculate overall outbound and inbound loss and bitrate every 3 seconds
+
+let prevInboundLoss = 0;
+let prevOutboundLoss = 0;
+let prevInboundPackets = 0;
+let prevOutboundPackets = 0;
+let prevInboundBytes = 0;
+let prevOutboundBytes = 0;
+
+setInterval(async () => {
+    const stats = await peer.getStats();
+    
+    // calculate packetloss percentage and bitrate
+
+    let inboundLoss = 0;
+    let outboundLoss = 0;
+    let inboundPackets = 0;
+    let outboundPackets = 0;
+    let inboundBytes = 0;
+    let outboundBytes = 0;
+
+    for(const report of stats.values()){
+        if(report.type == 'inbound-rtp'){
+            inboundLoss += report.packetsLost;
+            inboundPackets += report.packetsReceived;
+            inboundBytes += report.bytesReceived;
+        }
+        else if(report.type == 'outbound-rtp'){
+            outboundPackets += report.packetsSent;
+            outboundBytes += report.bytesSent;
+        }
+        else if(report.type == 'remote-inbound-rtp'){
+            outboundLoss += report.packetsLost;
+        }
+    }
+
+    const inboundLossPercent = (inboundLoss - prevInboundLoss) * 100 / (inboundPackets - prevInboundPackets);
+    const outboundLossPercent = (outboundLoss - prevOutboundLoss) * 100 / (outboundPackets - prevOutboundPackets);
+
+    const inboundBitrate = (inboundBytes - prevInboundBytes) * 8 / 3000;
+    const outboundBitrate = (outboundBytes - prevOutboundBytes) * 8 / 3000;
+
+    console.log(`IN: Packets: ${inboundPackets}, Lost: ${inboundLoss} | OUT: Packets: ${outboundPackets}, Lost: ${outboundLoss}`);
+    console.log(`IN: ${inboundLossPercent.toFixed(2)}% loss, ${inboundBitrate.toFixed(2)} kbps | OUT: ${outboundLossPercent.toFixed(2)}% loss, ${outboundBitrate.toFixed(2)} kbps`);
+
+    prevInboundLoss = inboundLoss;
+    prevOutboundLoss = outboundLoss;
+    prevInboundPackets = inboundPackets;
+    prevOutboundPackets = outboundPackets;
+
+
+
+}, 3000)
 
 
 

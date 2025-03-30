@@ -3,9 +3,30 @@ const {ntpToTimeMs, setUInt24, CustomEventTarget} = require('../helpers/common_h
 
 class RTPReceiver extends CustomEventTarget{
 
-    static #MAX_DROPOUT = 3000;
+    /**
+     * @constant {number} #MAX_DROPOUT - Maximum allowed difference between expected and received sequence numbers
+     * before considering a packet loss or sequence number wrap-around.
+     */
+    static #MAX_DROPOUT = 10000;
+
+    /**
+     * @constant {number} #MAX_MISORDER - Tolerance level for out-of-order packets.
+     * If the difference between the received sequence number and the last known sequence number is greater than this value,
+     * the packet is considered out-of-order.
+     */
     static #MAX_MISORDER = 100;
+
+    /**
+     * @constant {number} #MIN_SEQUENTIAL - Minimum number of sequential packets required to validate the stream during initialization.
+     * If the first few packets are not received in sequence, they are considered as lost.
+     * This value is used to determine the number of packets to wait for before initializing the sequence number.
+     */
     static #MIN_SEQUENTIAL = 2;
+    
+    /**
+     * @constant {number} #RTP_SEQ_MOD - The modulus (2^16 = 65536) for RTP sequence numbers, used to handle sequence number wrap-around.
+     * Cycle count is incremented by this value when the sequence number wraps around.
+    */
     static #RTP_SEQ_MOD = 1 << 16 
 
     #ssrcStats = {};
@@ -48,60 +69,67 @@ class RTPReceiver extends CustomEventTarget{
         
     }
 
-    #updateSequenceNo(ssrc, currentSeqNo){
-        const seqNoDelta = currentSeqNo - this.#ssrcStats[ssrc].maxSeqNo;
-        
-        const ssrcStats = this.#ssrcStats[ssrc];
+    #updateSequenceNo(ssrc, currentSeqNo) {
+        if (!this.#ssrcStats[ssrc]) {
+            this.#initSequenceNo(ssrc, currentSeqNo);
+            return true;
+        }
 
-        if(ssrcStats.probationPacketsRemaining > 0){
-            if(currentSeqNo == ssrcStats.maxSeqNo + 1){
+        const ssrcStats = this.#ssrcStats[ssrc];
+        const seqNoDelta = (currentSeqNo - ssrcStats.maxSeqNo) & (RTPReceiver.#RTP_SEQ_MOD - 1);
+
+        // Step 1: Handling probation period (initial sequence validation)
+        if (ssrcStats.probationPacketsRemaining > 0) {
+            if (currentSeqNo === (ssrcStats.maxSeqNo + 1) & 0xFFFF) {
                 ssrcStats.probationPacketsRemaining--;
                 ssrcStats.maxSeqNo = currentSeqNo;
 
-                //TODO: packetsReceived is not being incremented when in probation. 
-                // So it will be zero and those packets are considered as lost when sending RR 
-                // This is what the pseudocode in RFC 3550 looked like. Check if it is fine.
-
-                if(ssrcStats.probationPacketsRemaining == 0){
+                if (ssrcStats.probationPacketsRemaining === 0) {
                     this.#initSequenceNo(ssrc, currentSeqNo);
-                    ssrcStats.packetsReceived += 1;
-                    return true;
                 }
-            }
-            else{
-
-                // reset probation, but also consider current packet starting a new sequence. That's why the -1;
+                ssrcStats.packetsReceived += 1;
+                return true;
+            } else {
                 ssrcStats.probationPacketsRemaining = RTPReceiver.#MIN_SEQUENTIAL - 1;
                 ssrcStats.maxSeqNo = currentSeqNo;
-            }
-            return false;
-        }
-        else if(seqNoDelta < RTPReceiver.#MAX_DROPOUT){
-            if(currentSeqNo < ssrcStats.maxSeqNo){
-                ssrcStats.cycles += RTPReceiver.#RTP_SEQ_MOD;
-            }
-            if(currentSeqNo > ssrcStats.maxSeqNo){
-                ssrcStats.maxSeqNo = currentSeqNo;
-            }
-        }
-        else if(seqNoDelta <= RTPReceiver.#RTP_SEQ_MOD - RTPReceiver.#MAX_MISORDER){
-            if(currentSeqNo == ssrcStats.lastBadSeqNo){
-                this.#initSequenceNo(ssrc, currentSeqNo);
-            }
-            else{
-                ssrcStats.lastBadSeqNo = (currentSeqNo + 1) & (RTPReceiver.#RTP_SEQ_MOD - 1);
                 return false;
             }
         }
-        else{
-            console.log('out of order', ssrc, currentSeqNo)
+
+        // Step 2: Handling normal sequential packets (incrementing normally)
+        if (seqNoDelta < RTPReceiver.#MAX_DROPOUT) {
+            if (currentSeqNo < ssrcStats.maxSeqNo && (ssrcStats.maxSeqNo - currentSeqNo) > (RTPReceiver.#RTP_SEQ_MOD / 2)) {
+                // Sequence number wrap detected (65535 -> 0)
+                ssrcStats.cycles += RTPReceiver.#RTP_SEQ_MOD;
+            }
+
+            if (currentSeqNo > ssrcStats.maxSeqNo) {
+                ssrcStats.maxSeqNo = currentSeqNo;
+            }
+
+            ssrcStats.packetsReceived += 1;
+            return true;
         }
 
-        ssrcStats.packetsReceived += 1;
-        return true;
+        // Step 3: Large jump, but within expected range (possible packet loss)
+        else if (seqNoDelta <= (RTPReceiver.#RTP_SEQ_MOD - RTPReceiver.#MAX_MISORDER)) {
+            if (currentSeqNo === ssrcStats.lastBadSeqNo) {
+                // Second occurrence of this sequence confirms reset
+                this.#initSequenceNo(ssrc, currentSeqNo);
+                ssrcStats.packetsReceived += 1;
+                return true;
+            } else {
+                // Mark this as a possible sender reset, wait for confirmation
+                ssrcStats.lastBadSeqNo = currentSeqNo;
+                return false;
+            }
+        }
 
-        
-        
+        // Step 4: Out-of-order or completely invalid packet
+        else {
+            console.log("Out of order packet detected", ssrc, currentSeqNo);
+            return false;
+        }
     }
 
     #updateJitter(ssrc, departureRTPTimestamp){
