@@ -111,7 +111,7 @@ class RTPReceiver extends CustomEventTarget{
             return true;
         }
 
-        // Step 3: Large jump, but within expected range (possible packet loss)
+        // Step 3: Large jump (a.k.a greater than MAX_DROPOUT), but within expected range (possible sequence reset)
         else if (seqNoDelta <= (RTPReceiver.#RTP_SEQ_MOD - RTPReceiver.#MAX_MISORDER)) {
             if (currentSeqNo === ssrcStats.lastBadSeqNo) {
                 // Second occurrence of this sequence confirms reset
@@ -711,6 +711,133 @@ class RTPHelpers{
         buffer.writeUInt32BE(ssrc, 8);
 
         return buffer;
+    }
+
+    static getRTCPPacketTypeStr(packet){
+        // check if packet is NACK/PLI/FIR/TWCC/RR and print log
+        const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
+        const packetType = packet[1]; // RTCP Packet Type
+
+        switch (packetType) {
+            case 201:
+                //return ("got Receiver Report (RR), not forwarding it to sender!");
+                return "Receiver report(RR)";
+            case 205:
+                if (fmt === 1) {
+                    return ("NACK (Negative Acknowledgment)");
+                } else if (fmt === 15) {
+                    return ("TWCC (Transport-Wide Congestion Control)");
+                } else {
+                    return ("Unknown RTPFB packet");
+                }
+            case 206:
+                if (packet.toString('utf8', 12, 16) == 'REMB') {
+                    // Extract REMB estimate
+                    // Byte 13 holds the upper 6 bits for exponent (after shifting right by 2)
+                    // and the lower 2 bits are the high-order bits of the 18-bit mantissa.
+                    const brExp = packet.readUInt8(17) >> 2;
+                    // Combine the lower 2 bits of Byte 13 with Bytes 14-15 for an 18-bit mantissa.
+                    const brMantissa = ((packet.readUInt8(17) & 0x03) << 16) | packet.readUInt16BE(18);
+                    const bitrate = brMantissa * Math.pow(2, brExp);
+                    return `REMB (Receiver Estimated Max Bitrate): ${bitrate} bps`;
+                } else if (fmt === 1) {
+                    return "PLI (Picture Loss Indication)";
+                } else if (fmt === 4) {
+                    return "FIR (Full Intra Request)";
+                } else {
+                    return "Unknown Payload specific FB packet";
+                }
+            default:
+                return `Unknown RTCP packet type: ${packetType}, fmt: ${fmt}, packet: ${packet?.buffer?.toString()}`;
+
+        }
+    }
+
+    static splitCompoundRTCPPacket(compoundPacket){
+        const packets = [];
+        let start = 0;
+        while(start < compoundPacket.length){
+            const length = (compoundPacket.readUInt16BE(start + 2) + 1) * 4;
+            packets.push(compoundPacket.slice(start, start + length));
+            start += length;
+        }
+
+        return packets;
+    }
+
+    static identifySSRCofRTCPPacket(packet){
+        let ssrc;
+        const rtcpPacketType = packet[1];
+        if(rtcpPacketType == 200){
+            // It is a sender report
+            ssrc = packet.readUInt32BE(4);
+        }
+        else if(rtcpPacketType == 206){
+            // actually ssrc is determined differently for different RTCP ALFB (Application Layer Feedback) packets
+            
+            //const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
+            if(packet.toString('utf8', 12, 16) == 'REMB'){
+                ssrc = packet.readUInt32BE(20);
+            }
+            else{
+                // NACK/PLI/FIR/TWCC
+                ssrc = packet.readUInt32BE(8);
+            }
+
+        }
+        else{
+            ssrc = packet.readUInt32BE(8);
+        }
+        
+        return ssrc;
+    }
+
+    static identifyRTPPacket(packet){
+
+
+        //console.log('Identifying packet:', packet.slice(0, 15));
+        let type;
+        let rtcpPacketType;
+        let rtcpSubType;
+
+        const rtpPayloadType = packet[1] & 0b01111111;
+
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            type = 'RTP';
+        }
+        else{
+            type = 'RTCP';
+            rtcpPacketType = packet[1];
+            const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
+
+            switch (rtcpPacketType) {
+                case 201:
+                    rtcpSubType = 'RR';
+                    break;
+                case 205:
+                    if (fmt === 1) {
+                        rtcpSubType = 'NACK';
+                    } else if (fmt === 15) {
+                        rtcpSubType = 'TWCC';
+                    }
+                    break;
+                case 206:
+                    if (packet.toString('utf8', 12, 16) == 'REMB') {
+                        rtcpSubType = 'REMB';
+                    } else if (fmt === 1) {
+                        rtcpSubType = 'PLI';
+                    } else if (fmt === 4) {
+                        rtcpSubType = 'FIR';
+                    } 
+                    break;
+                default:
+                    break;
+                
+            }
+            
+        }
+
+        return {type, rtcpPacketType, rtcpSubType};
     }
 }
 

@@ -34,8 +34,13 @@ class PeerContext extends CustomEventTarget{
     /**
      * Ideally, one ICEContext, DTLSContext and SRTPContext per BUNDLE group.
      */
+    /** @type {ICEContext} */
     iceContext = new ICEContext({onPacketReceived: this.#allocatePacketToAppropriateMethod.bind(this)});
+
+    /** @type {DTLSContext} */
     #dtlsContext = null;
+
+    /** @type {SRTPContext} */
     #srtpContext = null;
 
     rtpStreamSubscriberCallbacks = {};
@@ -335,25 +340,47 @@ class PeerContext extends CustomEventTarget{
 
     #incomingRTPDemuxer(packet){
 
-        const rtpPayloadType = packet[1] & 0b01111111;
-        const rtcpPacketType = packet[1];
+        try{
+            // TODO: decrypt before demuxing
+            if(this.#isUsingEncryption){
+                /*
+                    Ideally, we should have a separate SRTPContext for each BUNDLE.
+                    And use the appropriate SRTPContext instead of this.#srtpContext
+                */
+                const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
+                packet = this.#srtpContext.decryptPacket(packet, extensionsInfo);
 
-        let ssrc;
+                if(packet == null){
+                    console.log(this.#peerId, 'packet is null after decryption');
+                    return;
+                }
+            }
 
-        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-            ssrc = packet.readUInt32BE(8);
+            const rtpPayloadType = packet[1] & 0b01111111;
+
+            if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+                const ssrc = packet.readUInt32BE(8);
+                const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
+                const {mid} = this.#identifyMIDOfPacket(packet, ssrc, extensionsInfo);
+                this.#txControllers[mid]?.write(packet)
+            }
+            else{
+                // It is a RTCP packet. Probably a compound one!
+                const packets = RTPHelpers.splitCompoundRTCPPacket(packet);
+                if(packets.length > 1){
+                    console.log(this.#peerId, 'compound RTCP packet', packets.length, packets);
+                }
+                for(const packet of packets){
+                    const ssrc = RTPHelpers.identifySSRCofRTCPPacket(packet);
+                    const {mid} = this.#identifyMIDOfPacket(packet, ssrc);
+                    this.#txControllers[mid]?.write(packet)
+                }
+            }
+            
         }
-        else if(rtcpPacketType == 200){
-            ssrc = packet.readUInt32BE(4);
+        catch(e){
+            console.error(this.#peerId, 'error in demuxing', e, packet);
         }
-        else{
-            ssrc = packet.readUInt32BE(8);
-        }
-        //console.log(this.#peerId, 'ssrc', ssrc, 'rtpPayloadType', rtpPayloadType, 'rtcpPacketType', rtcpPacketType);
-        
-        const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
-        const {mid, source} = this.#identifyMIDOfPacket(packet, ssrc, extensionsInfo);
-        this.#txControllers[mid]?.write(packet)
     }
 
     #identifyMIDOfPacket(packet, ssrc, extensionsInfo){

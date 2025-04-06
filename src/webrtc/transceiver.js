@@ -163,18 +163,22 @@ class Transceiver extends CustomEventTarget{
 
     #handlePacketFromClient(packet){
         const rtpPayloadType = packet[1] & 0b01111111;
-        const rtcpPacketType = packet[1];
         if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
             // RTP-i
             this.#handleRTPFromClient(packet);
         }
-        else if(rtcpPacketType == 200){
-            // FB-i
-            this.#handleSenderReportFromClient(packet);
-        }
-        else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
-            // FB-o
-            this.#handleFeedbackForProducerFromClient(packet);
+        else{
+            // RTCP packet. (Definitely not a compound one)
+            const rtcpPacketType = packet[1];
+            if(rtcpPacketType == 200){
+                // FB-i
+                this.#handleSenderReportFromClient(packet);
+            }
+            else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
+                // FB-o
+                console.log('\t======== feedback packet =============', rtcpPacketType, RTPHelpers.getRTCPPacketTypeStr(packet));
+                this.#handleFeedbackForProducerFromClient(packet);
+            }
         }
     }
 
@@ -184,13 +188,13 @@ class Transceiver extends CustomEventTarget{
 
         if((rtpPayloadType >= 96 && rtpPayloadType <= 127)){
             // RTP-i
-            if(this.srtpContext){
-                const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
-                packet = this.srtpContext.decryptPacket(packet, extensionsInfo);
-                if(!packet){
-                    return;
-                }
-            }
+            // if(this.srtpContext){
+            //     const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
+            //     packet = this.srtpContext.decryptPacket(packet, extensionsInfo);
+            //     if(!packet){
+            //         return;
+            //     }
+            // }
             this.receiverCtx.processRTPFromClient(packet);
         }
 
@@ -201,22 +205,10 @@ class Transceiver extends CustomEventTarget{
     }
 
     #handleSenderReportFromClient(packet){
-        if(this.srtpContext){
-            packet = this.srtpContext.decryptPacket(packet);
-            if(!packet){
-                return
-            }
-        }
         this.receiverCtx.processSRFromClient(packet);
     }
 
     #handleFeedbackForProducerFromClient(packet){
-        if(this.srtpContext){
-            packet = this.srtpContext.decryptPacket(packet);
-            if(!packet){
-                return
-            }
-        }
         
         if(packet[1] == 201){
             // Receiver Report! Do not forward to stream
@@ -224,40 +216,9 @@ class Transceiver extends CustomEventTarget{
             return;
         }
 
-        console.log("got", this.#getRTCPPacketTypeStr(packet));
+        console.log("forwarding feedback to producer stream", RTPHelpers.getRTCPPacketTypeStr(packet));
 
         this.#senderStream.feedback(packet);
-    }
-
-    #getRTCPPacketTypeStr(packet){
-        // check if packet is NACK/PLI/FIR/TWCC/RR and print log
-        const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
-        const packetType = packet[1]; // RTCP Packet Type
-
-        switch (packetType) {
-            case 201:
-                //return ("got Receiver Report (RR), not forwarding it to sender!");
-                return "Receiver report(RR)";
-            case 205:
-                if (fmt === 1) {
-                    return ("NACK (Negative Acknowledgment)");
-                } else if (fmt === 15) {
-                    return ("TWCC (Transport-Wide Congestion Control)");
-                } else {
-                    return ("Unknown RTPFB packet");
-                }
-            case 206:
-                if (fmt === 1) {
-                    return ("PLI (Picture Loss Indication)");
-                } else if (fmt === 4) {
-                    return ("FIR (Full Intra Request)");
-                } else {
-                    return ("Unknown Payload specific FB packet");
-                }
-            default:
-                return `Unknown RTCP packet type: ${packetType}, fmt: ${fmt}, packet: ${packet?.buffer?.toString()}`;
-
-        }
     }
 
 
@@ -295,8 +256,39 @@ class Transceiver extends CustomEventTarget{
     #handleRTCPToClient(packet){
 
         //TODO: ideally, you need to debounce/throttle the RTCP packets to be sent to the client
+        
+        const packetData = RTPHelpers.identifyRTPPacket(packet);
+        //console.log('RTCP packet received from consumer', packetData, packet.slice(0, 18));
+        if(packetData.rtcpPacketType == 206){
+            if(packetData.rtcpSubType == 'REMB'){
+                return;
+            }
+            else if(packetData.rtcpSubType == 'PLI'){
+                console.log('PLI received from consumer');
 
-        console.log('sending', this.#getRTCPPacketTypeStr(packet), 'to client');
+                const ssrc = packet.readUInt32BE(8)
+                packet = this.receiverCtx.processFeedbackToClient(packet);
+                const ssrcAfter = packet.readUInt32BE(8);
+                console.log('SSRC in RTCP packet', ssrc, 'SSRC after processing', ssrcAfter);
+                
+                this.#sendPacketToClient(packet);
+                return;
+            }
+            else if(packetData.rtcpSubType == 'FIR'){
+                console.log('FIR received from consumer');
+                this.requestKeyFrame();
+                return;
+            }
+            else{
+                return;
+            }
+
+        }
+        else{
+            return;
+        }
+
+        
        
         const ssrc = packet.readUInt32BE(8)
         packet = this.receiverCtx.processFeedbackToClient(packet);
@@ -307,7 +299,7 @@ class Transceiver extends CustomEventTarget{
 
     requestKeyFrame(){
         let packet = RTPHelpers.generatePLI(0);
-        console.log('requesting PLI from receiver stream', packet);
+        console.trace('requesting PLI from receiver stream', packet);
         this.#receiverStream.feedback(packet);
 
     }
