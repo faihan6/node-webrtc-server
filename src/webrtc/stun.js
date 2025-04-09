@@ -77,8 +77,10 @@ class ICEContext{
             candidateStrings.push(`a=candidate:121418589 1 udp 2122260224 ${localAddress} ${address.port} typ host\r\n`);
         } 
 
-        const srflxAddress = this.localCandidateSockets.srflx.address();
-        candidateStrings.push(`a=candidate:121418589 1 udp 2122250224 ${globalThis.serverConfig.publicIP} ${srflxAddress.port} typ srflx\r\n`);
+        if(globalThis.serverConfig.publicIP){
+            const srflxAddress = this.localCandidateSockets.srflx.address();
+            candidateStrings.push(`a=candidate:121418589 1 udp 2122250224 ${globalThis.serverConfig.publicIP} ${srflxAddress.port} typ srflx\r\n`);
+        }
 
         return candidateStrings;
     }

@@ -9,3 +9,6 @@ videoSupportedCodecs = ["VP8/90000"]
 supportedHeaderExtensions = [
     'urn:ietf:params:rtp-hdrext:sdes:mid'
 ]
+
+#publicIP = "0.0.0.0"
+nackWaitTimeMS = 0

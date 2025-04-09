@@ -179,8 +179,8 @@ class RTPReceiver extends CustomEventTarget{
                     if(seqNosToSendNack.length > 0){
                         const nackBuffers = this.#generateNacks(ssrc, seqNosToSendNack);
                         for(const nackBuffer of nackBuffers){
-                        if(nackBuffer){
-                            this.dispatchEvent('send_fb_i_to_client', nackBuffer)
+                            if(nackBuffer){
+                                this.dispatchEvent('send_fb_i_to_client', nackBuffer)
                             }
                         }
 
@@ -191,7 +191,7 @@ class RTPReceiver extends CustomEventTarget{
                     }
 
                     ssrcStats.nackTimer = null;
-                }, 150);
+                }, globalThis.serverConfig.nackWaitTimeMS);
             }
             
         }

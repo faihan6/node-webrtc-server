@@ -172,11 +172,12 @@ class Transceiver extends CustomEventTarget{
             const rtcpPacketType = packet[1];
             if(rtcpPacketType == 200){
                 // FB-i
+                console.log('\t======== got sender report packet =============', rtcpPacketType);
                 this.#handleSenderReportFromClient(packet);
             }
             else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
                 // FB-o
-                console.log('\t======== feedback packet =============', rtcpPacketType, RTPHelpers.getRTCPPacketTypeStr(packet));
+                console.log('\t======== got feedback packet =============', rtcpPacketType, RTPHelpers.getRTCPPacketTypeStr(packet));
                 this.#handleFeedbackForProducerFromClient(packet);
             }
         }
@@ -209,15 +210,15 @@ class Transceiver extends CustomEventTarget{
     }
 
     #handleFeedbackForProducerFromClient(packet){
-        
-        if(packet[1] == 201){
-            // Receiver Report! Do not forward to stream
-            // TODO: Collect stats before retuning
-            return;
+
+        const packetDetails = RTPHelpers.identifyRTPPacket(packet);
+
+        if(packetDetails.rtcpSubType != 'PLI' && packetDetails.rtcpSubType != 'FIR'){
+            console.log(`Not forwarding ${packetDetails.rtcpSubType} to producer stream`);
+            return 
         }
 
-        console.log("forwarding feedback to producer stream", RTPHelpers.getRTCPPacketTypeStr(packet));
-
+        console.log(`Forwarding ${packetDetails.rtcpSubType} to producer stream`);
         this.#senderStream.feedback(packet);
     }
 
@@ -260,10 +261,7 @@ class Transceiver extends CustomEventTarget{
         const packetData = RTPHelpers.identifyRTPPacket(packet);
         //console.log('RTCP packet received from consumer', packetData, packet.slice(0, 18));
         if(packetData.rtcpPacketType == 206){
-            if(packetData.rtcpSubType == 'REMB'){
-                return;
-            }
-            else if(packetData.rtcpSubType == 'PLI'){
+            if(packetData.rtcpSubType == 'PLI'){
                 console.log('PLI received from consumer');
 
                 const ssrc = packet.readUInt32BE(8)
@@ -279,13 +277,7 @@ class Transceiver extends CustomEventTarget{
                 this.requestKeyFrame();
                 return;
             }
-            else{
-                return;
-            }
 
-        }
-        else{
-            return;
         }
 
         
