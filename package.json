@@ -1,7 +1,9 @@
 {
-  "dependencies": {
-    "crc32": "^0.2.2",
-    "toml": "^3.0.0",
-    "ws": "^8.16.0"
-  }
+	"dependencies": {
+		"crc32": "^0.2.2",
+		"ws": "^8.16.0"
+	},
+	"scripts": {
+		"postinstall": "node generate-server-config.js"
+	}
 }
