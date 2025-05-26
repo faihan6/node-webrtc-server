@@ -2,8 +2,8 @@
 const config = {
 
     // Certificate and Key must be provided here. We will not generate them.
-    certificatePath: "cert.pem",
-    keyPath: "key.pem",
+    certificatePath: "certificates/cert.pem",
+    keyPath: "certificates/key.pem",
 
     // Specify the audio codecs that will be supported.
     audioSupportedCodecs: ["opus/48000"],
