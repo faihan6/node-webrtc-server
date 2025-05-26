@@ -1,0 +1,14 @@
+
+# IDE specific files
+.vscode
+
+# macOS specific files
+.DS_Store
+
+# Node.js specific files
+node_modules/
+package-lock.json
+
+# Application specific files
+keylog.log
+server-config.js

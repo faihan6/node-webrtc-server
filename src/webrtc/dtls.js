@@ -121,7 +121,9 @@ class DTLSContext extends CustomEventTarget{
                     this.preMasterSecret = this.computeSharedSecret(this.clientPublicKey, this.serverPrivateKey);
                     this.masterSecret = this.computeMasterSecret(this.preMasterSecret, this.clientRandom, this.serverRandom);
 
-                    this.writeToKeyLogFile(this.clientRandom, this.masterSecret);
+                    if(globalThis.serverConfig.keyLogOutputPath){
+                        this.writeToKeyLogFile(this.clientRandom, this.masterSecret);
+                    }
 
                     this.dispatchEvent('dtlsParamsReady', {
                         masterSecret: this.masterSecret, 

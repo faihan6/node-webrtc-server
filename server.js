@@ -1,10 +1,6 @@
 
 // load configs first
-const fs = require('fs');
-
-const toml = require('toml');
-const configFile = fs.readFileSync('server-config.toml');
-const config = toml.parse(configFile);
+const config = require('./server-config.js');
 globalThis.serverConfig = config;
 console.log('Config is..', config);
 
