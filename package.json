@@ -4,6 +4,6 @@
 		"ws": "^8.16.0"
 	},
 	"scripts": {
-		"postinstall": "node generate-server-config.js"
+		"postinstall": "install.js"
 	}
 }
