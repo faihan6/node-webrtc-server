@@ -60,25 +60,27 @@ function initializeSignalling(){
                 const audioMid = message.params.audioMid;
                 const videoMid = message.params.videoMid;
 
-                const sender = users.find(user => user.userId == producerId);
-                const receiver = wsUserMap.get(ws);
+                const senderUser = users.find(user => user.userId == producerId);
+                const receiverUser = wsUserMap.get(ws);
 
-                if(receiver.peer.signallingState != 'stable'){
-                    console.log('waiting for signalling to be done for receiver peer', receiver.userId);
-                    await new Promise(res => receiver.peer.addEventListener('signalling_stable', res));
+                if(receiverUser.peer.signallingState != 'stable'){
+                    console.log('waiting for signalling to be done for receiver peer', receiverUser.userId);
+                    await new Promise(res => receiverUser.peer.addEventListener('signalling_stable', res));
                 }
-                console.log('signalling is done for receiver peer', receiver.userId);
+                console.log('signalling is done for receiver peer', receiverUser.userId);
 
-                const audioStream = sender.peer.transceivers[0].getReceiverStream();
-                receiver.peer.transceivers[audioMid].setSenderStream(audioStream);
+                const audioStream = senderUser.peer.transceivers[0].getReceiverStream();
+                receiverUser.peer.transceivers[audioMid].setSenderStream(audioStream);
 
-                const videoStream = sender.peer.transceivers[1].getReceiverStream();
-                receiver.peer.transceivers[videoMid].setSenderStream(videoStream);
+                const videoStream = senderUser.peer.transceivers[1].getReceiverStream();
+                receiverUser.peer.transceivers[videoMid].setSenderStream(videoStream);
 
-                sender.peer.transceivers[1].requestKeyFrame();
+                // TODO: request key frame from senderUser's receiver
+                senderUser.peer.transceivers[1].receiverCtx.requestKeyFrame();
+                //senderUser.peer.transceivers[1].requestKeyFrame();
 
 
-                console.log(`client subscribed: user ${receiver.userId} | direction: ${receiver.peer.selfDirection}`);
+                console.log(`client subscribed: user ${receiverUser.userId} | direction: ${receiverUser.peer.selfDirection}`);
                 
             }
 
