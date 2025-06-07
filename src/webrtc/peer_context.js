@@ -1,9 +1,7 @@
 
-const { ICEContext } = require('./stun');
-const { DTLSContext, getFingerprintOfCertificate } = require('./dtls')
-const { RTPHelpers } = require('./rtp');
+const dtls = require('./dtls')
 const { SRTPContext } = require('./srtp');
-const { Transceiver, TxController } = require('./transceiver');
+const { Bundle } = require('./bundle');
 const { CustomEventTarget } = require('../helpers/common_helper');
 
 const supportedCodecs = {
@@ -28,26 +26,15 @@ class PeerContext extends CustomEventTarget{
 
     remoteCertificateFingerprint = null;
 
-    ssrcMIDMap = {};
-    idOfMIDExtension = null;
+    #idOfMIDExtension = null;
 
-    /**
-     * Ideally, one ICEContext, DTLSContext and SRTPContext per BUNDLE group.
-     */
-    /** @type {ICEContext} */
-    iceContext = new ICEContext({onPacketReceived: this.#allocatePacketToAppropriateMethod.bind(this)});
+    #midBundleMap = {};
+    #midFingerprintMap = {};
 
-    /** @type {DTLSContext} */
-    #dtlsContext = null;
+    #midAttributesMap = {};
 
-    /** @type {SRTPContext} */
-    #srtpContext = null;
 
     rtpStreamSubscriberCallbacks = {};
-
-
-    transceivers = {};
-    #txControllers = {};
 
     #isUsingEncryption = true;
 
@@ -60,77 +47,19 @@ class PeerContext extends CustomEventTarget{
         this.#peerId = id;
     }
 
+    getTransceivers(){
+        const bundles = Object.values(this.#midBundleMap);
+        const transceivers = bundles.flatMap(bundle => bundle.getTransceivers());
+        return transceivers;
+    }
+
     setRemoteDescription(offer){
         this.signallingState = SIGNALLING_STATE.HAVE_REMOTE_OFFER;
         this.remoteOffer = offer;
-    }
 
-    async generateAnswer() {
+        this.#isUsingEncryption = offer.sdp.match(/a=fingerprint:(.*)/) ? true : false;
 
-        const offer = this.remoteOffer;
-        
-        if(this.signallingState != SIGNALLING_STATE.HAVE_REMOTE_OFFER){
-            throw new Error('Invalid signalling state');
-        }
-
-        let answer = '';
-
-        let vBlock = ''
-        vBlock += 'v=0\r\n';
-        vBlock += 'o=- 0 0 IN IP4 127.0.0.1\r\n';
-        vBlock += 's=NODEPEER\r\n';
-        vBlock += 't=0 0\r\n';
-
-        // 1. extract all the candidates from the offer
-        const remoteCandidates = [];
-        offer.sdp.split('\r\n').forEach(line => {
-            if (line.startsWith('a=candidate')) {
-                remoteCandidates.push(line);
-            }
-        });
-
-
-        let sessionAttributesBlock = ''
-
-        // 2. Add the self candidate to answer
-        for(const candidateStr of await this.iceContext.getCandidates()){
-            sessionAttributesBlock += candidateStr;
-        }
-
-    
-        // 3. Get remote ICE ufrag and pwd from the offer
-        const remoteUfrag = offer.sdp.match(/a=ice-ufrag:(.*)/)[1];
-        const remotePwd = offer.sdp.match(/a=ice-pwd:(.*)/)[1];
-        this.iceContext.setRemoteUfragAndPassword(remoteUfrag, remotePwd);
-
-        // 4. Add self ICE ufrag and pwd to answer
-        const selfUfrag = this.iceContext.selfUfrag
-        const selfPwd = this.iceContext.selfPwd
-        sessionAttributesBlock += 'a=ice-ufrag:' + selfUfrag + '\r\n';
-        sessionAttributesBlock += 'a=ice-pwd:' + selfPwd + '\r\n';
-
-        
-        const certificateFPInOffer = offer.sdp.match(/a=fingerprint:(.*)/);
-        if(certificateFPInOffer){
-
-            this.#dtlsContext = new DTLSContext();
-            this.#srtpContext = new SRTPContext();
-
-            // 5. Get the certificate fingerprint from the offer
-            const remoteCertificateFingerprint = certificateFPInOffer[1];
-            this.#dtlsContext.setRemoteFingerprint(remoteCertificateFingerprint);
-
-
-            // 6. Add the self certificate fingerprint to answer
-            const fp = this.#formatFingerprint(await getFingerprintOfCertificate())
-            console.log(this.#peerId, 'our fingerprint', fp);
-            sessionAttributesBlock +=  (fp) + '\r\n';
-
-            // 6.1 add setup attribute
-            sessionAttributesBlock += 'a=setup:passive\r\n';
-
-        }
-        else{
+        if(!this.#isUsingEncryption){
             if(globalThis.serverConfig.disableWebRTCEncryption){
                 console.log(this.#peerId, 'No fingerprint in the offer. Remote Peer wants no encryption')
                 this.#isUsingEncryption = false;
@@ -140,48 +69,17 @@ class PeerContext extends CustomEventTarget{
             }
         }
 
-
-        let bundleLine = 'a=group:BUNDLE'
-        
-        const mBlocks = offer.sdp.split('m=').slice(1);
-        for(let i = 0; i < mBlocks.length; i++){
-
-            let mBlock = mBlocks[i];
-
-            // 7. populate the transceivers
-            const mediaType = mBlock.split(' ')[0];
-            console.log(this.#peerId, 'mBlock:', mediaType);
-
+        // populate midAttributesMap
+        offer.sdp.split('m=').slice(1).forEach(mBlock => {
             const mid = mBlock.match(/a=mid:(.*)/)[1];
+            const mediaType = mBlock.split(' ')[0];
             const remoteDirection = mBlock.match(/a=sendrecv|a=recvonly|a=sendonly|a=inactive/)[0].slice(2);
             const selfDirection = (remoteDirection == 'sendonly') ? 'recvonly' :
                                     (remoteDirection == 'recvonly') ? 'sendonly' :
                                     remoteDirection;
 
-            const payloadTypes = {};
-            mBlock.split('\r\n').forEach(line => {
-                if (line.startsWith('a=rtpmap')) {
-                    const payloadType = line.match(/a=rtpmap:(\d+)/)[1];
-                    const codec = line.split(' ')[1]
-
-                    if(supportedCodecs[mediaType].some(supportedCodec => codec.includes(supportedCodec))){
-                        payloadTypes[payloadType] = codec;
-                    }
-                }
-            });
-
-            const extensions = [];
-
-            mBlock.split('\r\n').forEach(line => {
-                if(!line.startsWith('a=extmap')){
-                    return;
-                }
-                if(supportedHeaderExtensions.some(supportedExtension => line.includes(supportedExtension))){
-                    const id = line.match(/a=extmap:(\d+)/)[1];
-                    const uri = line.split(' ')[1];
-                    extensions.push({id, uri});
-                }
-            })
+            const payloadTypes = this.#extractPayloadTypesFromMBlock(mBlock);
+            const extensions = this.#extractExtensionsFromMBlock(mBlock);
 
             /*
                 Read this!
@@ -205,10 +103,10 @@ class PeerContext extends CustomEventTarget{
 
                 Here is the problem,
 
-                1. To know the transceiver, you need to know the MID
+                1. To know the which transceiver a packet belongs to, you need to know the MID
                 2. To find the MID from the packet, you need to know the ID of urn:ietf:params:rtp-hdrext:sdes:mid extension.
                 3. To know the ID of urn:ietf:params:rtp-hdrext:sdes:mid extension, you need to know the extensionId-URI mapping
-                4. extensionId-URI mapping is present in the transceiver.
+                4. extensionId-URI mapping is present in the transceiver. Which transceiver? Go to step 1.
 
                 It is a circular dependency.
 
@@ -219,25 +117,109 @@ class PeerContext extends CustomEventTarget{
 
             extensions.forEach(extension => {
                 if(extension.uri == 'urn:ietf:params:rtp-hdrext:sdes:mid'){
-                    this.idOfMIDExtension = extension.id;
+                    this.#idOfMIDExtension = extension.id;
                 }
             })
 
-            console.log(this.#peerId, `mid: ${mid}, mediaType: ${mediaType}, remoteDirection: ${remoteDirection}, selfDirection: ${selfDirection}, payloadTypes:`, payloadTypes, 'extensions:', extensions);
+            const remoteUfrag = mBlock.match(/a=ice-ufrag:(.*)/)[1];
+            const remotePwd = mBlock.match(/a=ice-pwd:(.*)/)[1];
+            const remoteCandidates = [];
+            mBlock.split('\r\n').forEach(line => {
+                if(line.startsWith('a=candidate')){
+                    remoteCandidates.push(line);
+                }
+            });
 
-            const txController = new TxController();
-            const tx = new Transceiver({
-                mid, mediaType, 
+            const fingerprint = mBlock.match(/a=fingerprint:(.*)/) ? mBlock.match(/a=fingerprint:(.*)/)[1] : null;
+            const dtlsSetup = mBlock.match(/a=setup:(.*)/) ? mBlock.match(/a=setup:(.*)/)[1] : null;
+            
+            this.#midAttributesMap[mid] = {
+                mediaType, 
                 direction: selfDirection, 
                 payloadTypes, 
                 extensions,
-                iceContext: this.iceContext,
-                dtlsContext: this.#dtlsContext,
-                srtpContext: this.#srtpContext,
-                controller: txController
-            });
-            this.transceivers[mid] = tx;
-            this.#txControllers[mid] = txController;
+                remoteUfrag,
+                remotePwd,
+                remoteCandidates,
+                fingerprint,
+                dtlsSetup
+            };
+
+            console.log(this.#peerId, 'midAttributesMap', this.#midAttributesMap[mid]);
+        })
+
+
+        // There could be multiple BUNDLE lines in the offer.
+        if(offer.sdp.includes('a=group:BUNDLE')){
+
+            offer.sdp.split('\r\n')
+                .filter(line => line.startsWith('a=group:BUNDLE'))
+                .forEach(bundleLine => {
+
+                    const midList = bundleLine.split(' ').slice(1);
+
+                    this.#createBundleForMIDs(midList);
+                })
+        }
+        else{
+            // If no bundle, each m-block is a separate bundle.
+            offer.sdp.split('m=').slice(1)
+                .forEach(mBlock => {
+                    const mid = mBlock.match(/a=mid:(.*)/)[1];
+                    const midList = [mid];
+
+                    this.#createBundleForMIDs(midList);
+                })
+        }
+    }
+
+    async generateAnswer() {
+
+        const bundleLevelAttributesAdded = new Map();
+
+        for(const bundle of Object.values(this.#midBundleMap)){
+            bundleLevelAttributesAdded.set(bundle, false);
+        }
+
+        const offer = this.remoteOffer;
+        
+        if(this.signallingState != SIGNALLING_STATE.HAVE_REMOTE_OFFER){
+            throw new Error('Invalid signalling state');
+        }
+
+        let answer = '';
+
+        let vBlock = ''
+        vBlock += 'v=0\r\n';
+        vBlock += 'o=- 0 0 IN IP4 127.0.0.1\r\n';
+        vBlock += 's=NODEPEER\r\n';
+        vBlock += 't=0 0\r\n';
+
+        // 1. extract all the candidates from the offer
+        // deleted..
+
+
+        let bundleLine = 'a=group:BUNDLE'
+        
+        const mBlocks = offer.sdp.split('m=').slice(1);
+        for(let i = 0; i < mBlocks.length; i++){
+
+            let mBlock = mBlocks[i];
+
+            // 7. populate the transceivers
+            const mediaType = mBlock.split(' ')[0];
+            console.log(this.#peerId, 'mBlock:', mediaType);
+
+            const mid = mBlock.match(/a=mid:(.*)/)[1];
+            const remoteDirection = mBlock.match(/a=sendrecv|a=recvonly|a=sendonly|a=inactive/)[0].slice(2);
+            const selfDirection = (remoteDirection == 'sendonly') ? 'recvonly' :
+                                    (remoteDirection == 'recvonly') ? 'sendonly' :
+                                    remoteDirection;
+
+            const payloadTypes = this.#midAttributesMap[mid].payloadTypes;
+            const extensions = this.#midAttributesMap[mid].extensions;
+
+            console.log(this.#peerId, `mid: ${mid}, mediaType: ${mediaType}, remoteDirection: ${remoteDirection}, selfDirection: ${selfDirection}, payloadTypes:`, payloadTypes, 'extensions:', extensions);
 
             // 8. add m-blocks to answer
             // 8.1 replace remote direction with self direction
@@ -272,22 +254,67 @@ class PeerContext extends CustomEventTarget{
                 return false;
             }).join('\r\n');
 
-            // add sessionAttributes to first m-block
-            if(i == 0){
-                let sessAttrBlockFixed = sessionAttributesBlock.endsWith('\r\n') ? sessionAttributesBlock.slice(0, -2) : sessionAttributesBlock;
-                mBlock += '\r\n' + sessAttrBlockFixed;
+            // // add sessionAttributes to first m-block
+            // if(i == 0){
+            //     let sessAttrBlockFixed = sessionAttributesBlock.endsWith('\r\n') ? sessionAttributesBlock.slice(0, -2) : sessionAttributesBlock;
+            //     mBlock += '\r\n' + sessAttrBlockFixed;
+            // }
+
+            /**
+             * @type {Bundle}
+             */
+            const bundle = this.#midBundleMap[mid];
+            if(!bundleLevelAttributesAdded.get(bundle)){
+                bundleLevelAttributesAdded.set(bundle, true);
+                
+                let bundleLevelAttributesBlock = ''
+
+                // 2. Add the self candidate to answer
+                for(const candidateStr of await bundle.iceContext.getLocalCandidates()){
+                    bundleLevelAttributesBlock += candidateStr;
+                }
+
+            
+                // 3. Get remote ICE ufrag and pwd from the offer
+                const remoteUfrag = offer.sdp.match(/a=ice-ufrag:(.*)/)[1];
+                const remotePwd = offer.sdp.match(/a=ice-pwd:(.*)/)[1];
+                bundle.iceContext.setRemoteUfragAndPassword(remoteUfrag, remotePwd);
+
+                // 4. Add self ICE ufrag and pwd to answer
+                const selfUfrag = bundle.iceContext.selfUfrag
+                const selfPwd = bundle.iceContext.selfPwd
+                bundleLevelAttributesBlock += 'a=ice-ufrag:' + selfUfrag + '\r\n';
+                bundleLevelAttributesBlock += 'a=ice-pwd:' + selfPwd + '\r\n';
+
+                if(this.#isUsingEncryption){
+
+                    // 6. Add the self certificate fingerprint to answer
+                    const fpHash = await dtls.getFingerprintOfCertificate();
+                    const formattedFingerprint = this.#formatFingerprint(fpHash)
+                    console.log(this.#peerId, 'our fingerprint', formattedFingerprint);
+                    bundleLevelAttributesBlock +=  formattedFingerprint + '\r\n';
+
+                    // 6.1 add setup attribute
+                    bundleLevelAttributesBlock += 'a=setup:passive\r\n';
+
+                }
+
+                mBlock += '\r\n' + bundleLevelAttributesBlock;
             }
 
             // add ssrc and stream id
             //TODO: ideally, try to get it from tx.rtpContext.outgoingSSRC
-            const outgoingSSRC = 100 + Number(mid);
+
+            const tx = bundle.getTransceivers().find(tx => tx.mid == mid);
+            console.log(this.#peerId, 'tx', tx);
+            const outgoingSSRC = tx.sender.outgoingSSRC;
             const streamId = `stream_${Math.floor(Number(mid) / 2)}`
             const trackId = `track_${Number(mid) % 2}`
 
             let ssrcLine = `a=ssrc:${outgoingSSRC} msid:${streamId} ${trackId}\r\n`;
             ssrcLine += `a=msid:${streamId} ${trackId}`;
 
-            mBlock += '\r\n' + ssrcLine;
+            mBlock += mBlock.endsWith('\r\n') ? ssrcLine : '\r\n' + ssrcLine;
 
             // 8.2 add m=
             const mLine = `m=${mediaType} 9 UDP/TLS/RTP/SAVPF ${Object.keys(payloadTypes).join(' ')}\r\n`;
@@ -318,106 +345,74 @@ class PeerContext extends CustomEventTarget{
         return `a=fingerprint:sha-256 ${formattedFingerprint}`;
     }
 
+    #createBundleForMIDs(midList){
 
-    /*
-        Demuxing is done only at the Peer level because, multiple transceivers might share
-        the same iceConext/srtpContext. One transceiver cannot demux and delegate to other transceivers.
-        So, it makes sense to demux at the peer level.
-    */
+        const isUsingEncryption = this.#isUsingEncryption;
+        const remoteFingerPrint = midList.find(mid => this.#midAttributesMap[mid].fingerprint)?.fingerprint;
 
-    #allocatePacketToAppropriateMethod(packet, remote){
-        
-        if(packet.at(0) == 0x16 && this.#dtlsContext){
-            // DTLS
-            const response = this.#dtlsContext.handleDTLS(packet);
-            this.iceContext.sendPacket(response, remote);
+
+        console.log(this.#peerId, 'creating bundle for mids', midList)
+
+        const midInfo = midList.map(mid => ({
+            mid,
+            mediaType: this.#midAttributesMap[mid].mediaType,
+            direction: this.#midAttributesMap[mid].direction,
+            payloadTypes: this.#midAttributesMap[mid].payloadTypes,
+            extensions: this.#midAttributesMap[mid].extensions
+        }));
+
+        const bundleParams = {
+            isUsingEncryption,
+            remoteFingerPrint,
+            idOfMIDExtension: this.#idOfMIDExtension
         }
-        else if(packet.at(0) >> 6 == 0x02){
-            // RTP/RTCP
-            this.#incomingRTPDemuxer(packet);    
-        }
+
+        console.log('bundleParams', bundleParams, this.#idOfMIDExtension);
+
+        const bundle = new Bundle({
+            bundleParams,
+            associatedMIDs: midInfo,
+        });
+
+        midList.forEach(mid => {
+            this.#midBundleMap[mid] = bundle;
+        })
+
+        return bundle;
     }
 
-    #incomingRTPDemuxer(packet){
+    #extractPayloadTypesFromMBlock(mBlock){
+        const payloadTypes = {};
+        const mediaType = mBlock.split(' ')[0];
+        mBlock.split('\r\n').forEach(line => {
+            if (line.startsWith('a=rtpmap')) {
+                const payloadType = line.match(/a=rtpmap:(\d+)/)[1];
+                const codec = line.split(' ')[1]
 
-        try{
-            // TODO: decrypt before demuxing
-            if(this.#isUsingEncryption){
-                /*
-                    Ideally, we should have a separate SRTPContext for each BUNDLE.
-                    And use the appropriate SRTPContext instead of this.#srtpContext
-                */
-                const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
-                packet = this.#srtpContext.decryptPacket(packet, extensionsInfo);
-
-                if(packet == null){
-                    console.log(this.#peerId, 'packet is null after decryption');
-                    return;
+                if(supportedCodecs[mediaType].some(supportedCodec => codec.includes(supportedCodec))){
+                    payloadTypes[payloadType] = codec;
                 }
             }
+        });
 
-            const rtpPayloadType = packet[1] & 0b01111111;
-
-            if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
-                const ssrc = packet.readUInt32BE(8);
-                const extensionsInfo = RTPHelpers.parseHeaderExtensions(packet);
-                const {mid} = this.#identifyMIDOfPacket(packet, ssrc, extensionsInfo);
-                this.#txControllers[mid]?.write(packet)
-            }
-            else{
-                // It is a RTCP packet. Probably a compound one!
-                const packets = RTPHelpers.splitCompoundRTCPPacket(packet);
-                if(packets.length > 1){
-                    console.log(this.#peerId, 'compound RTCP packet', packets.length, packets);
-                }
-                for(const packet of packets){
-                    const ssrc = RTPHelpers.identifySSRCofRTCPPacket(packet);
-                    const {mid} = this.#identifyMIDOfPacket(packet, ssrc);
-                    this.#txControllers[mid]?.write(packet)
-                }
-            }
-            
-        }
-        catch(e){
-            console.error(this.#peerId, 'error in demuxing', e, packet);
-        }
+        return payloadTypes;
     }
 
-    #identifyMIDOfPacket(packet, ssrc, extensionsInfo){
-        let mid;
-        let source;
-        if(extensionsInfo && extensionsInfo.areExtensionsPresent){
-            const midExtension = extensionsInfo.extensions.find(ext => ext.id == this.idOfMIDExtension);
-            mid = midExtension.value.toString('utf8');
-            source = 'extension';
+    #extractExtensionsFromMBlock(mBlock){
+        const extensions = [];
 
-            this.ssrcMIDMap[ssrc] = mid;
-        }
-
-        if(mid == null || mid == undefined){
-            
-            mid = this.ssrcMIDMap[ssrc];
-            source = 'ssrc';
-        }
-
-        const rtcpPacketType = packet[1];
-        if(rtcpPacketType >= 200 && rtcpPacketType <= 206){
-            // this is a RTCP packet! allocate it to the correct transceiver
-            const tx = Object.values(this.transceivers).find(tx => tx.outgoingSSRC == ssrc);
-            if(tx){
-                //console.log(this.#peerId, 'tx found for ssrc', ssrc, tx.outgoingSSRC);
-                mid = tx.mid;
-                source = 'SDP';
-                this.ssrcMIDMap[ssrc] = mid;
+        mBlock.split('\r\n').forEach(line => {
+            if(!line.startsWith('a=extmap')){
+                return;
             }
-        }
-        
+            if(supportedHeaderExtensions.some(supportedExtension => line.includes(supportedExtension))){
+                const id = line.match(/a=extmap:(\d+)/)[1];
+                const uri = line.split(' ')[1];
+                extensions.push({id, uri});
+            }
+        })
 
-        if(mid == null || mid == undefined){
-            console.log(this.#peerId, 'mid not found for ssrc', ssrc, packet.slice(0,35));
-        }
-
-        return {mid, source};
+        return extensions;
     }
 
 }

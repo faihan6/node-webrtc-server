@@ -335,11 +335,9 @@ class SRTPContext extends CustomEventTarget{
 
             return Buffer.concat([packet.slice(0, encryptedPayloadStartIndex), decryptedPayload]);
         }
-
-        return packet.slice(0, authTagStartIndex);
-
-
-
+        else{
+            throw new Error('SRTCP_E_FLAG_NOT_SET');
+        }
         
     }
     
