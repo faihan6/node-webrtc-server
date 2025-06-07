@@ -548,12 +548,11 @@ class RTPReceiver extends CustomEventTarget{
         }
         else if(rtcpPacketType == 200){
             // RTCP (process, but don't forward to stream)
-            console.log('RTPReceiver received RTCP packet', packet);
             this.#processSRFromClient(packet);
         }
     }
 
-    #handleFeedbackFromStreamConsumer(packet){
+    #handleFeedbackFromStreamConsumer(packet, packetData){
 
         let responsePacket;
 
@@ -578,7 +577,6 @@ class RTPReceiver extends CustomEventTarget{
     }
 
     #sendFeedbackToClient(packet){
-        console.log('RTPReceiver sending feedback to client', packet);
         this.#receiverController.dispatchEvent('send_fb_i_to_client', packet);
     }
 
@@ -594,6 +592,10 @@ class RTPReceiver extends CustomEventTarget{
 class RTPSenderController extends CustomEventTarget{
     constructor(){
         super();
+    }
+
+    write(packet){
+        this.dispatchEvent('packet', packet);
     }
 
 
@@ -645,7 +647,8 @@ class RTPSender extends CustomEventTarget{
 
     #handleIncomingPacketFromStream(packet, packetInfo){
         // if rtp
-        if(packetInfo.rtpPayloadType >= 96 && packetInfo.rtpPayloadType <= 127){
+        const rtpPayloadType = packet[1] & 0b01111111;
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
             this.#fixPayloadType(packet, packetInfo);
             const processedPacket = this.#processRTPToClient(packet);
             this.#controller.write(processedPacket);

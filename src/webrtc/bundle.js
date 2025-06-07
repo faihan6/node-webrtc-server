@@ -61,6 +61,7 @@ class Bundle{
             this.#transceivers[mid] = tx;
 
             controller.addEventListener('send_fb_i_to_client', (packet) => this.#sendPacketToRemote(packet));
+            controller.addEventListener('send_rtp_o_to_client', (packet) => this.#sendPacketToRemote(packet));
         })
     }
 
@@ -84,7 +85,6 @@ class Bundle{
     #incomingRTPDemuxer(packet){
 
         try{
-            const originalPacket = packet.slice();
             // TODO: decrypt before demuxing
             if(this.#isUsingEncryption){
                 /*
@@ -110,12 +110,10 @@ class Bundle{
             }
             else{
                 // It is a RTCP packet. Probably a compound one!
-                console.log('incoming encrypted RTCP packet', originalPacket);
-                console.log('incoming decrypted RTCP packet', packet);
 
                 const packets = RTPHelpers.splitCompoundRTCPPacket(packet);
                 if(packets.length > 1){
-                    console.log('compound RTCP packet', packets.length, packets);
+                    //console.log('compound RTCP packet', packets.length, packets);
                 }
                 for(const packet of packets){
                     const ssrc = RTPHelpers.identifySSRCofRTCPPacket(packet);
