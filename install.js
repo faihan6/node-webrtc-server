@@ -12,8 +12,17 @@ else{
 
 // Generate certificates if they don't exist
 if(!fs.existsSync('certificates')){
-    console.log('Generating certificates...');
     fs.mkdirSync('certificates');
+    generateCertificates();
+}
+else{
+    if(!fs.existsSync('certificates/key.pem') || !fs.existsSync('certificates/cert.pem')){
+        generateCertificates();
+    }
+}
+
+function generateCertificates(){
+    console.log('Generating certificates...');
     execSync('openssl ecparam -name prime256v1 -genkey -noout -out certificates/key.pem');
     execSync('openssl req -x509 -key certificates/key.pem -days 365 -out certificates/cert.pem -subj "/CN=localhost"');
 }
