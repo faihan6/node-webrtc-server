@@ -86,6 +86,12 @@ class Transceiver extends CustomEventTarget{
             this.sender = new RTPSender({
                 outgoingSSRC,
                 clockRate,
+                payloadTypes,
+                controller: this.#senderController
+            });
+
+            this.#senderController.addEventListener('packet', packet => {
+                this.#controller.dispatchEvent('send_rtp_o_to_client', packet)
             });
         }
         if(direction == 'sendrecv' || direction == 'recvonly'){
@@ -121,17 +127,23 @@ class Transceiver extends CustomEventTarget{
             const rtcpPacketType = packet[1];
             if(rtcpPacketType == 200){
                 // FB-i
-                console.log('\t======== got sender report packet =============', rtcpPacketType);
-                console.log('handle sender report from client');
-                //this.#handleSenderReportFromClient(packet);
+                this.#receiverController.write(packet);
             }
-            else if(rtcpPacketType >= 201 && rtcpPacketType <= 206){
+            else if(rtcpPacketType == 201){
+                // Receiver report
+                //console.log('Transceiver received receiver report | for receiver | from client | not handled yet');
+            }
+            else if(rtcpPacketType == 202){
+                // SDES
+                //console.log('Transceiver received SDES packet from client | not handled yet');
+            }
+            else if(rtcpPacketType >= 203 && rtcpPacketType <= 206){
                 // FB-o
-                console.log('\t======== got feedback packet =============', rtcpPacketType, RTPHelpers.getRTCPPacketTypeStr(packet));
-                console.log('handle feedback for producer from client');
-                //this.#handleFeedbackForProducerFromClient(packet);
+                //console.log('Transceiver received feedback | for sender | from client', RTPHelpers.getRTCPPacketTypeStr(packet));
+                const packetData = RTPHelpers.identifyRTPPacket(packet);
+                this.sender.stream.feedback(packet, packetData);
             }
-            this.#receiverController.write(packet);
+            
         }
     }
 
