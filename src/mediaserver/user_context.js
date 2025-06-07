@@ -20,8 +20,8 @@ class UserContext{
 
     getDetails(){
 
-        const sendingAudio = this.peer.transceivers[0].direction.includes('recv');
-        const sendingVideo = this.peer.transceivers[1].direction.includes('recv');
+        const sendingAudio = this.peer.getTransceivers()[0].direction.includes('recv');
+        const sendingVideo = this.peer.getTransceivers()[1].direction.includes('recv');
 
         return {
             userId: this.userId,

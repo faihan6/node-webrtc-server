@@ -69,15 +69,14 @@ function initializeSignalling(){
                 }
                 console.log('signalling is done for receiver peer', receiverUser.userId);
 
-                const audioStream = senderUser.peer.transceivers[0].getReceiverStream();
-                receiverUser.peer.transceivers[audioMid].setSenderStream(audioStream);
+                const audioStream = senderUser.peer.getTransceivers()[0].receiver.stream;
+                receiverUser.peer.getTransceivers()[audioMid].sender.replaceStream(audioStream);
 
-                const videoStream = senderUser.peer.transceivers[1].getReceiverStream();
-                receiverUser.peer.transceivers[videoMid].setSenderStream(videoStream);
+                const videoStream = senderUser.peer.getTransceivers()[1].receiver.stream;
+                receiverUser.peer.getTransceivers()[videoMid].sender.replaceStream(videoStream);
 
                 // TODO: request key frame from senderUser's receiver
-                senderUser.peer.transceivers[1].receiverCtx.requestKeyFrame();
-                //senderUser.peer.transceivers[1].requestKeyFrame();
+                senderUser.peer.getTransceivers()[1].receiver.requestKeyFrame();
 
 
                 console.log(`client subscribed: user ${receiverUser.userId} | direction: ${receiverUser.peer.selfDirection}`);

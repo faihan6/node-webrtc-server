@@ -67,7 +67,7 @@ class ICEContext{
         this.#listeningPromise = Promise.all(listenPromises);
     }
 
-    async getCandidates(){
+    async getLocalCandidates(){
         await this.#listeningPromise;
 
         const candidateStrings = []

@@ -1,5 +1,16 @@
 
 const {ntpToTimeMs, setUInt24, CustomEventTarget} = require('../helpers/common_helper');
+const {RTPStream, RTPStreamController} = require('./rtp_stream');
+
+class RTPReceiverController extends CustomEventTarget{
+    constructor(){
+        super();
+    }
+
+    write(packet, packetInfo){
+        this.dispatchEvent('packet', packet, packetInfo);
+    }
+}
 
 class RTPReceiver extends CustomEventTarget{
 
@@ -31,8 +42,21 @@ class RTPReceiver extends CustomEventTarget{
 
     #ssrcStats = {};
 
-    constructor(){
+    
+    #receiverController = null;
+
+    #streamController = new RTPStreamController();
+    #stream = new RTPStream({controller: this.#streamController, onFeedback: this.#handleFeedbackFromStreamConsumer.bind(this)});
+
+    get stream(){
+        return this.#stream;
+    }
+
+    constructor(controller){
         super();
+        console.log('RTPReceiver constructor', controller);
+        this.#receiverController = controller;
+        this.#receiverController.addEventListener('packet', this.#handleIncomingPacketFromClient.bind(this));
     }
 
     #validateRTPHeader(rtpPacket){
@@ -180,7 +204,7 @@ class RTPReceiver extends CustomEventTarget{
                         const nackBuffers = this.#generateNacks(ssrc, seqNosToSendNack);
                         for(const nackBuffer of nackBuffers){
                             if(nackBuffer){
-                                this.dispatchEvent('send_fb_i_to_client', nackBuffer)
+                                this.#sendFeedbackToClient(nackBuffer);
                             }
                         }
 
@@ -393,7 +417,7 @@ class RTPReceiver extends CustomEventTarget{
         return buffer;
     }
 
-    processRTPFromClient(rtpPacket){
+    #processRTPFromClient(rtpPacket){
 
         const ssrc = rtpPacket.readUInt32BE(8);
         const seqNo = rtpPacket.readUInt16BE(2);
@@ -447,7 +471,7 @@ class RTPReceiver extends CustomEventTarget{
 
     }
 
-    processSRFromClient(rtcpPacket){
+    #processSRFromClient(rtcpPacket){
 
         //console.log('Feedback from client', rtcpPacket)
         const padding = (rtcpPacket[0] >> 5) & 0b1;
@@ -483,11 +507,16 @@ class RTPReceiver extends CustomEventTarget{
 
         const receiverReport = this.#generateReceiverReport(ssrc);
 
-        this.dispatchEvent('send_fb_i_to_client', receiverReport);
+        this.#sendFeedbackToClient(receiverReport);
    
     }
 
-    processFeedbackToClient(packet){
+    /**
+     * For now, this function rewrites the SSRC in the RTCP packet to the last received SSRC.
+     * @param {Buffer} packet 
+     * @returns {Buffer}
+     */
+    #processFeedbackToClient(packet){
 
         const targetSSRC = this.#getLastReceivedSSRC();
         console.log('rewriting RTCP SSRC to', targetSSRC)
@@ -509,8 +538,66 @@ class RTPReceiver extends CustomEventTarget{
         return lastReceivedSSRC;
     }
 
+    #handleIncomingPacketFromClient(packet, packetInfo) {
+        const rtpPayloadType = packet[1] & 0b01111111;
+        const rtcpPacketType = packet[1]
+        if(rtpPayloadType >= 96 && rtpPayloadType <= 127){
+            // RTP-i (process and forward to stream)
+            this.#processRTPFromClient(packet);
+            this.#streamController.write(packet, packetInfo);
+        }
+        else if(rtcpPacketType == 200){
+            // RTCP (process, but don't forward to stream)
+            console.log('RTPReceiver received RTCP packet', packet);
+            this.#processSRFromClient(packet);
+        }
+    }
+
+    #handleFeedbackFromStreamConsumer(packet){
+
+        let responsePacket;
+
+        if(packetData.rtcpPacketType == 206){
+            if(packetData.rtcpSubType == 'PLI'){
+                console.log('PLI received from consumer');
+                responsePacket = this.#processFeedbackToClient(packet);                
+            }
+            else if(packetData.rtcpSubType == 'FIR'){
+                console.log('FIR received from consumer');
+                responsePacket = RTPHelpers.generatePLI(0);
+                console.trace('requesting PLI from receiver stream', responsePacket);
+            }
+        }
+        else{
+            responsePacket = this.#processFeedbackToClient(packet);
+        }
+
+        if(responsePacket){
+            this.#sendFeedbackToClient(responsePacket);
+        }
+    }
+
+    #sendFeedbackToClient(packet){
+        console.log('RTPReceiver sending feedback to client', packet);
+        this.#receiverController.dispatchEvent('send_fb_i_to_client', packet);
+    }
+
+    requestKeyFrame(){
+        const pliPacket = RTPHelpers.generatePLI(0);
+        console.trace('requesting PLI from receiver stream', pliPacket);
+        
+        this.#sendFeedbackToClient(pliPacket);
+    }
+
 }
 
+class RTPSenderController extends CustomEventTarget{
+    constructor(){
+        super();
+    }
+
+
+}
 class RTPSender extends CustomEventTarget{
     #outgoingSSRCStats = {
         packetsSent: 0,
@@ -533,14 +620,39 @@ class RTPSender extends CustomEventTarget{
 
     #outgoingSSRC = null;
     #clockRate = null;
+    #payloadTypes = null;
+    /** @type {RTPSenderController} */
+    #controller = null;
 
-    constructor({outgoingSSRC, clockRate}){
+    /** @type {RTPStream} */
+    stream = null;
+
+    #boundHandleIncomingPacketFromStream = null;
+    
+    constructor({controller, outgoingSSRC, clockRate, payloadTypes}){
         super();
+        this.#controller = controller;
         this.#outgoingSSRC = outgoingSSRC;
         this.#clockRate = clockRate;
+        this.#payloadTypes = payloadTypes;
+
+        this.#boundHandleIncomingPacketFromStream = this.#handleIncomingPacketFromStream.bind(this);
     }
 
-    processRTPToClient(rtpPacket){
+    get outgoingSSRC(){
+        return this.#outgoingSSRC;
+    }
+
+    #handleIncomingPacketFromStream(packet, packetInfo){
+        // if rtp
+        if(packetInfo.rtpPayloadType >= 96 && packetInfo.rtpPayloadType <= 127){
+            this.#fixPayloadType(packet, packetInfo);
+            const processedPacket = this.#processRTPToClient(packet);
+            this.#controller.write(processedPacket);
+        }
+    }
+
+    #processRTPToClient(rtpPacket){
 
         const packetSSRC = rtpPacket.readUInt32BE(8);
         const packetRTPTimestamp = rtpPacket.readUInt32BE(4);
@@ -628,6 +740,33 @@ class RTPSender extends CustomEventTarget{
 
     async #triggerSR(){
 
+    }
+
+    #fixPayloadType(rtpPacket, packetInfo){
+        const payloadTypeInPacket = rtpPacket[1] & 0b01111111;
+        const codec = packetInfo.codec;
+        const expectedPayloadType = Object.keys(this.#payloadTypes).find(key => this.#payloadTypes[key] == codec);
+
+        if(payloadTypeInPacket != expectedPayloadType){
+
+            // clone packet
+            rtpPacket = Buffer.from(rtpPacket);
+
+            let temp = rtpPacket[1] & 0b10000000;
+            temp |= expectedPayloadType;
+            rtpPacket[1] = temp;
+        }
+
+        return rtpPacket;
+    }
+
+    replaceStream(stream){
+        if(this.stream){
+            this.stream.removeEventListener('data', this.#boundHandleIncomingPacketFromStream);
+        }
+
+        this.stream = stream;
+        this.stream.addEventListener('data', this.#boundHandleIncomingPacketFromStream);
     }
 
 
@@ -719,9 +858,15 @@ class RTPHelpers{
         const packetType = packet[1]; // RTCP Packet Type
 
         switch (packetType) {
+            case 200:
+                return "Sender report(SR)";
             case 201:
                 //return ("got Receiver Report (RR), not forwarding it to sender!");
                 return "Receiver report(RR)";
+            case 202:
+                return "Source description(SDES)";
+            case 203:
+                return "BYE";
             case 205:
                 if (fmt === 1) {
                     return ("NACK (Negative Acknowledgment)");
@@ -772,6 +917,10 @@ class RTPHelpers{
             // It is a sender report
             ssrc = packet.readUInt32BE(4);
         }
+        else if(rtcpPacketType == 202){
+            // It is a source description
+            ssrc = packet.readUInt32BE(4);
+        }
         else if(rtcpPacketType == 206){
             // actually ssrc is determined differently for different RTCP ALFB (Application Layer Feedback) packets
             
@@ -811,8 +960,17 @@ class RTPHelpers{
             const fmt = packet[0] & 0b11111; // Feedback message type (for PT=205/206)
 
             switch (rtcpPacketType) {
+                case 200:
+                    rtcpSubType = 'SR';
+                    break;
                 case 201:
                     rtcpSubType = 'RR';
+                    break;
+                case 202:
+                    rtcpSubType = 'SDES';
+                    break;
+                case 203:
+                    rtcpSubType = 'BYE';
                     break;
                 case 205:
                     if (fmt === 1) {
@@ -842,8 +1000,7 @@ class RTPHelpers{
 }
 
 
-        
-
 module.exports = {
-    RTPSender, RTPReceiver, RTPHelpers
+    RTPSender, RTPReceiver, RTPHelpers,
+    RTPSenderController, RTPReceiverController
 }
