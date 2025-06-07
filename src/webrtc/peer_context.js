@@ -48,8 +48,11 @@ class PeerContext extends CustomEventTarget{
     }
 
     getTransceivers(){
-        const bundles = Object.values(this.#midBundleMap);
-        const transceivers = bundles.flatMap(bundle => bundle.getTransceivers());
+        const uniqueBundles = new Set(Object.values(this.#midBundleMap));
+        const transceivers = []
+        uniqueBundles.forEach(bundle => {
+            transceivers.push(...bundle.getTransceivers());
+        })
         return transceivers;
     }
 
@@ -199,7 +202,16 @@ class PeerContext extends CustomEventTarget{
         // deleted..
 
 
-        let bundleLine = 'a=group:BUNDLE'
+        let bundleLine = ''
+        
+        const bundleSet = new Set();
+        Object.values(this.#midBundleMap).forEach(bundle => {
+            bundleSet.add(bundle);
+        })
+
+        bundleSet.forEach(bundle => {
+            bundleLine += `a=group:BUNDLE ${bundle.associatedMIDs.map(mid => mid.mid).join(' ')}\r\n`;
+        })
         
         const mBlocks = offer.sdp.split('m=').slice(1);
         for(let i = 0; i < mBlocks.length; i++){
@@ -322,13 +334,10 @@ class PeerContext extends CustomEventTarget{
 
             answer += mBlock + '\r\n';
 
-            // 8.3 add mid to BUNDLE
-            bundleLine += ` ${mid}`
-
 
         }
 
-        vBlock += bundleLine + '\r\n'
+        vBlock += bundleLine
 
 
         answer = vBlock + answer;
