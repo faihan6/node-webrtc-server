@@ -1,5 +1,5 @@
 const { TxController, Transceiver } = require("./transceiver");
-const { ICEContext } = require("./stun");
+const { ICEContext } = require("./ice");
 const { DTLSContext } = require("./dtls");
 const { SRTPContext } = require("./srtp");
 const { RTPHelpers } = require("./rtp");
@@ -63,6 +63,10 @@ class Bundle{
             controller.addEventListener('send_fb_i_to_client', (packet) => this.#sendPacketToRemote(packet));
             controller.addEventListener('send_rtp_o_to_client', (packet) => this.#sendPacketToRemote(packet));
         })
+    }
+
+    get associatedMIDs(){
+        return this.#associatedMIDs;
     }
 
     getTransceivers(){
