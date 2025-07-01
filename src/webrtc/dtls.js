@@ -121,7 +121,7 @@ class DTLSContext extends CustomEventTarget{
                     this.preMasterSecret = this.computeSharedSecret(this.clientPublicKey, this.serverPrivateKey);
                     this.masterSecret = this.computeMasterSecret(this.preMasterSecret, this.clientRandom, this.serverRandom);
 
-                    if(globalThis.serverConfig.keyLogOutputPath){
+                    if(globalThis.serverConfig.outputDTLSSecrets){
                         this.writeToKeyLogFile(this.clientRandom, this.masterSecret);
                     }
 
@@ -920,7 +920,14 @@ class DTLSContext extends CustomEventTarget{
     }
 
     writeToKeyLogFile(clientRandom, masterSecret){
-        const keyLogFile = fs.createWriteStream('keylog.txt', {flags: 'a'});
+        if (!fs.existsSync(globalThis.serverConfig.keyLogOutputPath)) {
+            // Create directory if it doesn't exist
+            const dir = globalThis.serverConfig.keyLogOutputPath.substring(0, globalThis.serverConfig.keyLogOutputPath.lastIndexOf('/'));
+            if (dir && !fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+        }
+        const keyLogFile = fs.createWriteStream('keylog.log', {flags: 'a'});
         keyLogFile.write(`CLIENT_RANDOM ${clientRandom.toString('hex')} ${masterSecret.toString('hex')}\n`);
         keyLogFile.end();
     }

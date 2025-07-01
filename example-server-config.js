@@ -27,6 +27,10 @@ const config = {
 
     // Disable DTLS encryption. STRICTLY FOR DEBUGGING PURPOSES ONLY.
     disableWebRTCEncryption: false,
+
+    // Output DTLS keys to the console.
+    outputDTLSSecrets: false,
+    keyLogOutputPath: "keylog.log",
 }
 
 
