@@ -15,3 +15,10 @@ server-config.js
 
 # Certificates
 certificates/
+
+#others
+**/tmp_html/*
+bundle logic
+
+#git
+.gitignore
