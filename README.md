@@ -58,17 +58,7 @@ To install the application and the necessary dependencies for *nix (UNIX-like) s
 npm install
 
 ```
-2. Generate a certificate-key pair for DTLS handshakes. When prompted for details, you can choose to provide them or skip (press enter).
-
-```bash
-mkdir certificates;
-cd certificates;
-openssl ecparam -name prime256v1 -genkey -noout -out key.pem;
-openssl req -new -key key.pem -out ecdsa.csr;
-openssl req -x509 -key key.pem -days 365 -out cert.pem;
-cd ..
-```
-3. You need a `server-config.toml` file which contains configurations for the server. A sample file is already provided with the name `server-config.example.toml`. Copy it and save it with `server-config.toml` as the name and make changes as required.
+This will create a new config file (with default config options) and generate a certificate-key pair inside `certificates` directory for DTLS handshake.
   
 
 ## Usage
