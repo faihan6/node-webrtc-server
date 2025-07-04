@@ -19,16 +19,21 @@ const wsUserMap = new WeakMap();
  * 3. Do not send leave messages for someone for whom joined message wasn't sent
  */
 
+const PORT = 8080;
+
 
 function initializeSignalling(){
 
     
     let server;
     if(globalThis.serverConfig.disableSecureWebSocket){
-        server = new WebSocket.Server({ port: 8080 });
+        console.log(`Using HTTP server on port ${PORT}`);
+        server = new WebSocket.Server({ port: PORT });
     }
     else{
         const https = require('https');
+
+        console.log(`Using HTTPS server on port ${PORT}`);
 
         // Read SSL certificate and key files
         const serverOptions = {
@@ -40,14 +45,16 @@ function initializeSignalling(){
         const httpsServer = https.createServer(serverOptions);
         
         // Create WebSocket server attached to HTTPS server
-        server = new WebSocket.Server({ server: httpsServer });
+        server = new WebSocket.Server({ server: httpsServer, port: PORT });
 
         
     }
+
+    console.log("Server type:", server.constructor.name);
     
     // Start WS server on port 8080
-    server.listen(8080, () => {
-        console.log('WebSocket server running on port 8080');
+    server.on('listening', () => {
+        console.log(`WebSocket server running on port ${PORT}`);
     });
 
     server.on('connection', (ws) => {
@@ -151,7 +158,6 @@ function initializeSignalling(){
 
     });
 
-    console.log('WebSocket server is running on ws://localhost:8080');
 }
 
 function broadcast(message, self){
