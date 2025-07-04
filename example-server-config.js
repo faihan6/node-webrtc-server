@@ -25,12 +25,19 @@ const config = {
     // Specify the path to the file where DTLS secrets are logged.
     // keyLogOutputPath: "keylog.log",
 
-    // Disable DTLS encryption. STRICTLY FOR DEBUGGING PURPOSES ONLY.
+    // Disable DTLS encryption. ENABLE ONLY FOR DEBUGGING PURPOSES.
     disableWebRTCEncryption: false,
 
     // Output DTLS keys to the console.
     outputDTLSSecrets: false,
     keyLogOutputPath: "keylog.log",
+
+    // Disable WebSocket Secure mode. ENABLE ONLY FOR DEBUGGING PURPOSES.
+    disableWebSocketSecure: false,
+    //websocketServerCertificatePath: "path/to/your/certificate.pem",
+    //websocketServerKeyPath: "path/to/your/private-key.pem",
+
+
 }
 
 

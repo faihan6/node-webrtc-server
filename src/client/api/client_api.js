@@ -15,7 +15,11 @@ class ServerContext extends EventTarget{
         console.log('Self User ID', this.userId);
 
         if(!url){
-            url = `ws://${window.location.hostname}:8080`;
+
+            const isSecure = window.location.protocol == 'https:';
+            const protocol = isSecure ? 'wss' : 'ws';
+
+            url = `${protocol}://${window.location.hostname}:8080`;
         }
 
         this.#ws = new WebSocket(url);

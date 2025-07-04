@@ -1,3 +1,6 @@
+
+const fs = require('fs');
+
 const WebSocket = require('ws');
 const { UserContext } = require('./user_context');
 
@@ -18,7 +21,34 @@ const wsUserMap = new WeakMap();
 
 
 function initializeSignalling(){
-    const server = new WebSocket.Server({ port: 8080 });
+
+    
+    let server;
+    if(globalThis.serverConfig.disableSecureWebSocket){
+        server = new WebSocket.Server({ port: 8080 });
+    }
+    else{
+        const https = require('https');
+
+        // Read SSL certificate and key files
+        const serverOptions = {
+            cert: fs.readFileSync(globalThis.serverConfig.certificatePath),
+            key: fs.readFileSync(globalThis.serverConfig.keyPath)
+        };
+
+        // Create HTTPS server
+        const httpsServer = https.createServer(serverOptions);
+        
+        // Create WebSocket server attached to HTTPS server
+        server = new WebSocket.Server({ server: httpsServer });
+
+        
+    }
+    
+    // Start WS server on port 8080
+    server.listen(8080, () => {
+        console.log('WebSocket server running on port 8080');
+    });
 
     server.on('connection', (ws) => {
 
