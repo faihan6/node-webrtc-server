@@ -43,9 +43,12 @@ function initializeSignalling(){
 
         // Create HTTPS server
         const httpsServer = https.createServer(serverOptions);
+        httpsServer.listen(PORT, () => {
+            console.log(`HTTPS server running on port ${PORT}`);
+        });
         
         // Create WebSocket server attached to HTTPS server
-        server = new WebSocket.Server({ server: httpsServer, port: PORT });
+        server = new WebSocket.Server({ server: httpsServer});
 
         
     }
