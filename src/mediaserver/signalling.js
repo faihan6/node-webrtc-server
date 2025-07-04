@@ -37,8 +37,8 @@ function initializeSignalling(){
 
         // Read SSL certificate and key files
         const serverOptions = {
-            cert: fs.readFileSync(globalThis.serverConfig.certificatePath),
-            key: fs.readFileSync(globalThis.serverConfig.keyPath)
+            cert: fs.readFileSync(globalThis.serverConfig.websocketServerCertificatePath),
+            key: fs.readFileSync(globalThis.serverConfig.websocketServerKeyPath)
         };
 
         // Create HTTPS server
